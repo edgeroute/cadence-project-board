@@ -340,9 +340,28 @@ server.listen(0, '127.0.0.1', () => {
   log(`listening on 127.0.0.1:${port}`);
 });
 
-// Without these the host's kill leaves the port held until the process is reaped.
+/*
+  Shut down promptly, which `server.close()` alone does not do.
+
+  `close()` stops accepting new connections and then waits for the open ones to finish —
+  and the frontend's `fetch` keeps a keep-alive socket open, so the callback may never
+  fire and the process sits there until the host's force-kill timer expires five seconds
+  later. `closeIdleConnections()` drops exactly those sockets.
+
+  This matters because of how claudecodeui updates a plugin: it stops the server, pulls,
+  and then starts it again — but *only if it was running when the update began*. A slow
+  or wedged shutdown is therefore not a cosmetic delay; it is time spent in a state where
+  anything that goes wrong leaves the server stopped, and a stopped server is one an
+  Update will silently decline to restart.
+
+  Guarded because `closeIdleConnections` arrived in Node 18.2; on anything older this is
+  the old behaviour, unchanged.
+*/
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+    // A last-resort ceiling, well inside the host's own 5s force-kill.
+    setTimeout(() => process.exit(0), 2000).unref();
   });
 }

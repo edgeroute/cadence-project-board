@@ -12773,7 +12773,7 @@ async function readConfig(projectPath) {
   const token = fileToken || envToken();
   if (!token) {
     throw new NotConfiguredError(
-      "No GitHub token. Add one in Settings, or set GH_TOKEN in the environment claudecodeui runs in."
+      "No GitHub token. Add one in Settings \u2014 claudecodeui starts plugins with a stripped environment, so an exported GH_TOKEN is not visible to this plugin."
     );
   }
   return {
@@ -12782,9 +12782,10 @@ async function readConfig(projectPath) {
     projectNumber: Number(parsed.projectNumber),
     enabled: parsed.enabled !== false,
     tokenSource: fileToken ? "config" : "env",
-    // Same fallback shape as the GitHub token: the file wins, the environment answers
-    // when the file is silent. The Anthropic SDK would read this variable itself, but
-    // reading it here keeps "is the AI half available?" answerable in one place.
+    // Same fallback shape as the GitHub token, and the same caveat: under claudecodeui
+    // the environment is stripped, so this only fires when the backend is run directly.
+    // Reading it here rather than letting the SDK do it keeps "is the AI half
+    // available?" answerable in one place.
     anthropicKey: parsed.anthropicKey?.trim() || process.env.ANTHROPIC_API_KEY || void 0,
     aiModel: parsed.aiModel?.trim() || DEFAULT_MODEL
   };
@@ -13429,5 +13430,7 @@ server.listen(0, "127.0.0.1", () => {
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(0), 2e3).unref();
   });
 }

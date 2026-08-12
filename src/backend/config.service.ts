@@ -38,11 +38,22 @@ export class NotConfiguredError extends Error {
 /**
  * The token, from the config file or the environment.
  *
- * `GH_TOKEN` (and `GITHUB_TOKEN`, which is what CI and the `gh` CLI both set) is
- * checked as a fallback so a machine that already has a working credential does not
- * need a second copy of it pasted into a file. The file wins when both exist: it is
- * the one the reader chose deliberately for this project, and a stray shell export
- * should not silently redirect the board to a different account's token.
+ * ⚠️ **Under claudecodeui the environment fallback never fires, by design.** The host
+ * starts a plugin's server with a deliberately minimal environment — `buildPluginEnv`
+ * in its `plugin-process.service` passes only `PATH`, `HOME`, `NODE_ENV` and
+ * `PLUGIN_NAME`, and explicitly never the host's full environment, so a `GH_TOKEN`
+ * exported in the shell that launched claudecodeui is *not* visible here. This plugin
+ * told readers otherwise in its setup message and its README for six versions; both now
+ * say the config file is the way.
+ *
+ * The fallback is kept rather than deleted because it is still correct wherever the
+ * backend is run directly — the smoke tests in this repo rely on it, and a future host
+ * may pass an environment through. It is simply not an answer to "how do I authenticate
+ * inside claudecodeui".
+ *
+ * The file wins when both exist: it is the one the reader chose deliberately for this
+ * project, and a stray shell export should not silently redirect the board to a
+ * different account's token.
  *
  * It is deliberately never returned to the frontend — see `publicConfig`.
  */
@@ -72,7 +83,7 @@ export async function readConfig(projectPath: string): Promise<ResolvedConfig> {
   const token = fileToken || envToken();
   if (!token) {
     throw new NotConfiguredError(
-      'No GitHub token. Add one in Settings, or set GH_TOKEN in the environment claudecodeui runs in.'
+      'No GitHub token. Add one in Settings — claudecodeui starts plugins with a stripped environment, so an exported GH_TOKEN is not visible to this plugin.'
     );
   }
 
@@ -82,9 +93,10 @@ export async function readConfig(projectPath: string): Promise<ResolvedConfig> {
     projectNumber: Number(parsed.projectNumber),
     enabled: parsed.enabled !== false,
     tokenSource: fileToken ? 'config' : 'env',
-    // Same fallback shape as the GitHub token: the file wins, the environment answers
-    // when the file is silent. The Anthropic SDK would read this variable itself, but
-    // reading it here keeps "is the AI half available?" answerable in one place.
+    // Same fallback shape as the GitHub token, and the same caveat: under claudecodeui
+    // the environment is stripped, so this only fires when the backend is run directly.
+    // Reading it here rather than letting the SDK do it keeps "is the AI half
+    // available?" answerable in one place.
     anthropicKey: parsed.anthropicKey?.trim() || process.env.ANTHROPIC_API_KEY || undefined,
     aiModel: parsed.aiModel?.trim() || DEFAULT_MODEL
   };

@@ -19,7 +19,9 @@ Modelled on [`szmidtpiotr/claude-github-issue`](https://github.com/szmidtpiotr/c
 
 Fine-grained tokens cannot read user-owned projects at all. GitHub exposes a `Projects` permission only for *organizations*, so there is no combination of fine-grained settings that works for a project under a user account. If a call fails with `INSUFFICIENT_SCOPES`, that is almost always why.
 
-The token is written to `.CadenceBoard/project-board.json` in the open project, and that directory is added to the project's `.gitignore` on first save. `$GH_TOKEN` (or `$GITHUB_TOKEN`) is used as a fallback when the file has no token, so a machine with a working credential needs no second copy.
+The token is written to `.CadenceBoard/project-board.json` in the open project, and that directory is added to the project's `.gitignore` on first save.
+
+⚠️ **Inside claudecodeui the config file is the only way in.** The host starts a plugin's server with a deliberately minimal environment — `PATH`, `HOME`, `NODE_ENV`, `PLUGIN_NAME` and nothing else — so a `GH_TOKEN` exported in the shell that launched claudecodeui is not visible to this plugin. `$GH_TOKEN` / `$GITHUB_TOKEN` / `$ANTHROPIC_API_KEY` still work when the backend is run directly, which is how this repo's smoke tests authenticate, but they are not an answer inside the host.
 
 ## Where Priority and Size live
 
@@ -79,6 +81,22 @@ Installed to `~/.claude/skills/board/SKILL.md` when the backend starts, and refr
 ```
 
 It reads the same config file and issues the same GraphQL rather than calling this plugin's backend: the backend's port is assigned at startup and reported only to claudecodeui, so nothing outside that process can address it.
+
+## If the plugin shows as not running
+
+claudecodeui's **Update** only restarts a server that was *already running* when you pressed it:
+
+```js
+const wasRunning = dependencies.isServerRunning(pluginName);
+if (wasRunning) await dependencies.stopServer(pluginName);
+const plugin = normalizePluginManifest(await dependencies.update(pluginName));
+if (wasRunning) await startServerIfAvailable(plugin);
+return { success: true, plugin };
+```
+
+It reports `success: true` either way, so a plugin whose server had stopped shows a clean update and a stopped plugin, with no error — and stays that way through every later Update, since the automatic start (`startEnabledPluginServers`) only runs when the host itself boots.
+
+**Toggle the plugin off and on in Settings → Plugins.** That path starts the server unconditionally. Restarting claudecodeui also works.
 
 ## Layout
 
