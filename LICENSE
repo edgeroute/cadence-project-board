@@ -43,9 +43,16 @@ What is derived from it:
     injection of inlined CSS at mount;
   - the HTML5 drag-and-drop arrangement between card and column;
   - the pattern of installing a companion skill into the user's Claude Code
-    skills directory from the plugin backend.
+    skills directory from the plugin backend;
+  - src/frontend/Markdown.tsx — the block parser, the "earliest match wins"
+    inline loop, and the table and blockquote handling, ported with the
+    changes its own header comment lists;
+  - src/frontend/imageUtils.ts — extracting and stripping markdown and HTML
+    images so they can be shown as thumbnails rather than inline;
+  - the image lightbox inside src/frontend/RichText.tsx.
 
 What is not: the entire data layer is original to this project. The upstream
 plugin boards repository issues by label over the GitHub REST API; this one
 boards GitHub Projects v2 items over GraphQL, which shares no code with it.
-No component, stylesheet or service file was copied.
+The board, column, card, settings and comment components, and every
+stylesheet rule, are this project's own.

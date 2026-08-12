@@ -7202,6 +7202,268 @@ const Board = ({
     }
   ))));
 };
+function firstAccepted(p2, text) {
+  if (!p2.accept) return p2.re.exec(text);
+  if (!p2.scan) p2.scan = new RegExp(p2.re.source, p2.re.flags.includes("g") ? p2.re.flags : p2.re.flags + "g");
+  p2.scan.lastIndex = 0;
+  let m2;
+  while ((m2 = p2.scan.exec(text)) !== null) {
+    if (p2.accept(text, m2)) return m2;
+    if (m2.index === p2.scan.lastIndex) p2.scan.lastIndex++;
+  }
+  return null;
+}
+const WORD = /[A-Za-z0-9_]/;
+function standalone(text, m2) {
+  const before = m2.index > 0 ? text[m2.index - 1] : "";
+  const after = text[m2.index + m2[0].length] ?? "";
+  return !WORD.test(before) && !WORD.test(after);
+}
+const INLINE = [
+  // Code first: its contents are literal and must not be re-parsed.
+  { re: /`([^`]+)`/, render: (m2, k) => /* @__PURE__ */ React.createElement("code", { key: k, className: "cpb-md-code" }, m2[1]) },
+  {
+    re: /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/,
+    render: (m2, k) => /* @__PURE__ */ React.createElement("a", { key: k, href: m2[2], target: "_blank", rel: "noopener noreferrer", className: "cpb-md-link" }, m2[1])
+  },
+  // A bare URL, after the labelled form above so `[text](url)` is not eaten by it.
+  // The trailing class excludes `.,;:)]}` so a link ending a sentence keeps its
+  // punctuation outside the anchor.
+  {
+    re: /https?:\/\/[^\s<>()[\]]+[^\s<>()[\].,;:!?'"]/,
+    render: (m2, k) => /* @__PURE__ */ React.createElement("a", { key: k, href: m2[0], target: "_blank", rel: "noopener noreferrer", className: "cpb-md-link" }, m2[0])
+  },
+  { re: /\*\*([^*]+)\*\*/, render: (m2, k) => /* @__PURE__ */ React.createElement("strong", { key: k }, renderInline(m2[1], k)) },
+  { re: /__([^_]+)__/, accept: standalone, render: (m2, k) => /* @__PURE__ */ React.createElement("strong", { key: k }, renderInline(m2[1], k)) },
+  { re: /~~([^~]+)~~/, render: (m2, k) => /* @__PURE__ */ React.createElement("del", { key: k }, renderInline(m2[1], k)) },
+  { re: /\*([^*]+)\*/, render: (m2, k) => /* @__PURE__ */ React.createElement("em", { key: k }, renderInline(m2[1], k)) },
+  { re: /_([^_]+)_/, accept: standalone, render: (m2, k) => /* @__PURE__ */ React.createElement("em", { key: k }, renderInline(m2[1], k)) }
+];
+function renderInline(text, keyPrefix) {
+  const nodes = [];
+  let remaining = text;
+  let i = 0;
+  let guard = 0;
+  while (remaining.length > 0 && guard++ < 5e3) {
+    let best = null;
+    for (const p2 of INLINE) {
+      const m2 = firstAccepted(p2, remaining);
+      if (!m2) continue;
+      if (best === null || m2.index < best.index) best = { index: m2.index, match: m2, p: p2 };
+    }
+    if (!best) {
+      nodes.push(remaining);
+      break;
+    }
+    if (best.index > 0) nodes.push(remaining.slice(0, best.index));
+    nodes.push(best.p.render(best.match, `${keyPrefix}-i${i++}`));
+    remaining = remaining.slice(best.index + best.match[0].length);
+  }
+  if (guard >= 5e3) nodes.push(remaining);
+  return nodes;
+}
+function withBreaks(nodes) {
+  const out = [];
+  nodes.forEach((node, ni2) => {
+    if (typeof node !== "string") {
+      out.push(node);
+      return;
+    }
+    const segments = node.split("\n");
+    segments.forEach((seg, si2) => {
+      out.push(seg);
+      if (si2 < segments.length - 1) out.push(/* @__PURE__ */ React.createElement("br", { key: `br-${ni2}-${si2}` }));
+    });
+  });
+  return out;
+}
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+function isTableSeparator(line) {
+  return /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(line);
+}
+const BULLET = /^\s*[-*+]\s+/;
+const ORDERED = /^\s*\d+\.\s+/;
+const TASK = /^\s*[-*+]\s+\[([ xX])\]\s+/;
+const Markdown = ({ text, className }) => {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let key = 0;
+  let i = 0;
+  const startsBlock = (line, next) => /^\s*```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) || /^\s*>\s?/.test(line) || ORDERED.test(line) || BULLET.test(line) || line.includes("|") && next !== void 0 && isTableSeparator(next);
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    const fence = line.match(/^\s*```(.*)$/);
+    if (fence) {
+      const code = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) code.push(lines[i++]);
+      i++;
+      blocks.push(
+        /* @__PURE__ */ React.createElement("pre", { key: key++, className: "cpb-md-pre" }, /* @__PURE__ */ React.createElement("code", null, code.join("\n")))
+      );
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length, 6);
+      const Tag = `h${level}`;
+      blocks.push(
+        /* @__PURE__ */ React.createElement(Tag, { key: key++, className: `cpb-md-h cpb-md-h${level}` }, renderInline(heading[2], key))
+      );
+      i++;
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push(/* @__PURE__ */ React.createElement("hr", { key: key++, className: "cpb-md-hr" }));
+      i++;
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const header = splitTableRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        rows.push(splitTableRow(lines[i++]));
+      }
+      blocks.push(
+        /* @__PURE__ */ React.createElement("div", { key: key++, className: "cpb-md-table-wrap" }, /* @__PURE__ */ React.createElement("table", { className: "cpb-md-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, header.map((c, ci2) => /* @__PURE__ */ React.createElement("th", { key: ci2 }, renderInline(c, `${key}-th${ci2}`))))), /* @__PURE__ */ React.createElement("tbody", null, rows.map((r2, ri2) => /* @__PURE__ */ React.createElement("tr", { key: ri2 }, r2.map((c, ci2) => /* @__PURE__ */ React.createElement("td", { key: ci2 }, renderInline(c, `${key}-td${ri2}-${ci2}`))))))))
+      );
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
+      blocks.push(
+        /* @__PURE__ */ React.createElement("blockquote", { key: key++, className: "cpb-md-quote" }, withBreaks(renderInline(quote.join("\n"), key)))
+      );
+      continue;
+    }
+    if (TASK.test(line)) {
+      const items = [];
+      let li2 = 0;
+      while (i < lines.length && TASK.test(lines[i])) {
+        const m2 = TASK.exec(lines[i]);
+        const done = m2[1].toLowerCase() === "x";
+        const content = lines[i].replace(TASK, "");
+        items.push(
+          /* @__PURE__ */ React.createElement("li", { key: li2++, className: `cpb-md-task${done ? " cpb-md-task--done" : ""}` }, /* @__PURE__ */ React.createElement("span", { className: "cpb-md-tick", "aria-hidden": "true" }, done ? "☑" : "☐"), /* @__PURE__ */ React.createElement("span", null, renderInline(content, `${key}-t${li2}`)))
+        );
+        i++;
+      }
+      blocks.push(/* @__PURE__ */ React.createElement("ul", { key: key++, className: "cpb-md-ul cpb-md-tasks" }, items));
+      continue;
+    }
+    if (ORDERED.test(line)) {
+      const items = [];
+      let li2 = 0;
+      while (i < lines.length && ORDERED.test(lines[i])) {
+        items.push(/* @__PURE__ */ React.createElement("li", { key: li2++ }, renderInline(lines[i].replace(ORDERED, ""), `${key}-ol${li2}`)));
+        i++;
+      }
+      blocks.push(/* @__PURE__ */ React.createElement("ol", { key: key++, className: "cpb-md-ol" }, items));
+      continue;
+    }
+    if (BULLET.test(line)) {
+      const items = [];
+      let li2 = 0;
+      while (i < lines.length && BULLET.test(lines[i]) && !TASK.test(lines[i])) {
+        items.push(/* @__PURE__ */ React.createElement("li", { key: li2++ }, renderInline(lines[i].replace(BULLET, ""), `${key}-ul${li2}`)));
+        i++;
+      }
+      blocks.push(/* @__PURE__ */ React.createElement("ul", { key: key++, className: "cpb-md-ul" }, items));
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== "" && !startsBlock(lines[i], lines[i + 1])) {
+      para.push(lines[i++]);
+    }
+    if (para.length > 0) {
+      blocks.push(
+        /* @__PURE__ */ React.createElement("p", { key: key++, className: "cpb-md-p" }, withBreaks(renderInline(para.join("\n"), key)))
+      );
+    } else {
+      blocks.push(/* @__PURE__ */ React.createElement("p", { key: key++, className: "cpb-md-p" }, lines[i]));
+      i++;
+    }
+  }
+  return /* @__PURE__ */ React.createElement("div", { className: `cpb-md${className ? " " + className : ""}` }, blocks);
+};
+function decodeHtmlEntities(text) {
+  return text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x2F;/g, "/");
+}
+function extractImages(text) {
+  const results = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (rawUrl, alt) => {
+    if (!rawUrl) return;
+    const url = decodeHtmlEntities(rawUrl);
+    if (seen.has(url)) return;
+    seen.add(url);
+    results.push({ alt, url });
+  };
+  const md2 = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+  let m2;
+  while ((m2 = md2.exec(text)) !== null) add(m2[2] ?? "", m2[1] ?? "");
+  const html = /<img\b([^>]*)>/gi;
+  while ((m2 = html.exec(text)) !== null) {
+    const attrs = m2[1] ?? "";
+    const src = attrs.match(/src=["'](https?:\/\/[^"']+)["']/i);
+    const alt = attrs.match(/alt=["']([^"']*)["']/i);
+    if (src == null ? void 0 : src[1]) add(src[1], (alt == null ? void 0 : alt[1]) ?? "");
+  }
+  return results;
+}
+function stripImages(text) {
+  return text.replace(/!\[[^\]]*\]\(https?:\/\/[^)\s]+\)/g, "").replace(/<a\b[^>]*>\s*<img\b[^>]*>\s*<\/a>/gi, "").replace(/<img\b[^>]*>/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+const Lightbox = ({ src, alt, onClose }) => {
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    setFailed(false);
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose, src]);
+  return /* @__PURE__ */ React.createElement("div", { className: "cpb-lightbox", onClick: onClose, role: "dialog", "aria-modal": "true", "aria-label": alt || "Image" }, /* @__PURE__ */ React.createElement("button", { className: "cpb-lightbox-close", onClick: onClose, "aria-label": "Close image" }, "✕"), failed ? /* @__PURE__ */ React.createElement("div", { className: "cpb-lightbox-error", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", null, "This image could not be loaded."), /* @__PURE__ */ React.createElement("a", { href: src, target: "_blank", rel: "noopener noreferrer", onClick: (e) => e.stopPropagation() }, "Open the original ↗")) : /* @__PURE__ */ React.createElement(
+    "img",
+    {
+      className: "cpb-lightbox-img",
+      src,
+      alt,
+      onClick: (e) => e.stopPropagation(),
+      onError: () => setFailed(true)
+    }
+  ));
+};
+const RichText = ({ text, className }) => {
+  const images = React.useMemo(() => extractImages(text), [text]);
+  const prose = React.useMemo(() => stripImages(text), [text]);
+  const [open, setOpen] = React.useState(null);
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, prose && /* @__PURE__ */ React.createElement(Markdown, { text: prose, className }), images.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "cpb-thumbs" }, images.map((img) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: img.url,
+      className: "cpb-thumb",
+      onClick: () => setOpen({ src: img.url, alt: img.alt }),
+      title: img.alt || "Open image"
+    },
+    /* @__PURE__ */ React.createElement("img", { src: img.url, alt: img.alt, loading: "lazy" })
+  ))), open && /* @__PURE__ */ React.createElement(Lightbox, { src: open.src, alt: open.alt, onClose: () => setOpen(null) }));
+};
 function ago(iso) {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return "";
@@ -7267,7 +7529,7 @@ const Comments = ({ issueId, knownCount, projectPath }) => {
   const count = (comments == null ? void 0 : comments.length) ?? knownCount;
   return /* @__PURE__ */ React.createElement("div", { className: "cpb-comments" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-field-name" }, count === 0 ? "Comments" : `Comments · ${count}`, comments === null && !error && /* @__PURE__ */ React.createElement("span", { className: "cpb-comments-loading" }, " loading…")), error && /* @__PURE__ */ React.createElement("div", { className: "cpb-error", role: "alert" }, error), comments !== null && comments.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "cpb-comments-empty" }, "No comments yet."), comments !== null && comments.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "cpb-comment-list" }, comments.map((c) => {
     var _a;
-    return /* @__PURE__ */ React.createElement("article", { key: c.id, className: "cpb-comment" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-comment-head" }, c.author && /* @__PURE__ */ React.createElement("img", { className: "cpb-comment-avatar", src: c.author.avatarUrl, alt: "" }), /* @__PURE__ */ React.createElement("span", { className: "cpb-comment-author" }, ((_a = c.author) == null ? void 0 : _a.login) ?? "ghost"), c.viewerDidAuthor && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "you"), /* @__PURE__ */ React.createElement("time", { className: "cpb-comment-time", dateTime: c.createdAt, title: new Date(c.createdAt).toLocaleString() }, ago(c.createdAt))), /* @__PURE__ */ React.createElement("div", { className: "cpb-comment-body" }, c.body));
+    return /* @__PURE__ */ React.createElement("article", { key: c.id, className: "cpb-comment" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-comment-head" }, c.author && /* @__PURE__ */ React.createElement("img", { className: "cpb-comment-avatar", src: c.author.avatarUrl, alt: "" }), /* @__PURE__ */ React.createElement("span", { className: "cpb-comment-author" }, ((_a = c.author) == null ? void 0 : _a.login) ?? "ghost"), c.viewerDidAuthor && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "you"), /* @__PURE__ */ React.createElement("time", { className: "cpb-comment-time", dateTime: c.createdAt, title: new Date(c.createdAt).toLocaleString() }, ago(c.createdAt))), /* @__PURE__ */ React.createElement("div", { className: "cpb-comment-body" }, /* @__PURE__ */ React.createElement(RichText, { text: c.body })));
   }), /* @__PURE__ */ React.createElement("div", { ref: endRef })), /* @__PURE__ */ React.createElement("div", { className: "cpb-composer" }, /* @__PURE__ */ React.createElement(
     "textarea",
     {
@@ -7338,11 +7600,10 @@ const ItemModal = ({ item, fields, busy, error, projectPath, onSetField, onClose
         onPick: (optionName2) => onSetField(f.name, optionName2)
       }
     ))),
-    (content == null ? void 0 : content.body) && // Plain text, deliberately not rendered markdown. Rendering it would mean
-    // shipping a markdown parser and a sanitiser for issue bodies this plugin
-    // does not own — a large surface for a panel whose job is to set two fields.
-    // The link below goes where the full, properly rendered issue lives.
-    /* @__PURE__ */ React.createElement("pre", { className: "cpb-body" }, content.body.slice(0, 4e3)),
+    (content == null ? void 0 : content.body) && // No character cap any more. It used to slice at 4000, which cuts mid-syntax:
+    // a truncated fenced code block leaves the fence unclosed and the parser
+    // swallows everything after it. The box scrolls instead.
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-body" }, /* @__PURE__ */ React.createElement(RichText, { text: content.body })),
     (content == null ? void 0 : content.id) && projectPath && /* @__PURE__ */ React.createElement(Comments, { issueId: content.id, knownCount: content.comments, projectPath }),
     content && /* @__PURE__ */ React.createElement("a", { className: "cpb-open-link", href: content.url, target: "_blank", rel: "noreferrer noopener" }, "Open on GitHub ↗")
   ));
@@ -7708,7 +7969,7 @@ const App = () => {
     }
   ));
 };
-const stylesRaw = "/*\n * Every selector is prefixed `cpb-`.\n *\n * These rules are injected into the host document's <head>, not into a shadow root,\n * so an unprefixed `.card` or a bare element selector would restyle claudecodeui\n * itself. There is exactly one element selector in this file and it is scoped under\n * .cpb-root.\n *\n * Colours are CSS custom properties defined on .cpb-root for each theme, so the whole\n * board follows api.context.theme by swapping one class rather than by threading a\n * theme prop through every component.\n */\n\n.cpb-root {\n  --cpb-bg: #ffffff;\n  --cpb-panel: #f6f7f9;\n  --cpb-panel-2: #eceef2;\n  --cpb-card: #ffffff;\n  --cpb-line: rgba(0, 0, 0, 0.12);\n  --cpb-text: #16181d;\n  --cpb-dim: #5c6370;\n  --cpb-accent: #2563eb;\n  --cpb-accent-soft: rgba(37, 99, 235, 0.1);\n  --cpb-danger: #b3261e;\n  --cpb-danger-bg: rgba(179, 38, 30, 0.1);\n\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  background: var(--cpb-bg);\n  color: var(--cpb-text);\n  font-family: ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif;\n  font-size: 13px;\n}\n\n.cpb-root--dark {\n  --cpb-bg: #16181d;\n  --cpb-panel: #1e2128;\n  --cpb-panel-2: #262a33;\n  --cpb-card: #232730;\n  --cpb-line: rgba(255, 255, 255, 0.12);\n  --cpb-text: #e7e9ee;\n  --cpb-dim: #9aa1ae;\n  --cpb-accent: #7aa2f7;\n  --cpb-accent-soft: rgba(122, 162, 247, 0.16);\n  --cpb-danger: #f08a7a;\n  --cpb-danger-bg: rgba(240, 138, 122, 0.14);\n}\n\n/* ---------- toolbar ---------- */\n\n.cpb-bar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--cpb-line);\n  flex-wrap: wrap;\n}\n\n.cpb-bar-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }\n.cpb-bar-right { display: flex; align-items: center; gap: 6px; }\n\n.cpb-h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }\n.cpb-count { color: var(--cpb-dim); font-size: 12px; white-space: nowrap; }\n\n.cpb-search {\n  width: 200px;\n  padding: 6px 10px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n}\n.cpb-search:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n\n.cpb-btn {\n  /* 32px, not 44: this is a desktop web UI inside a host whose own controls are this\n     size, and a board of 44pt buttons would read as a different application. The\n     touch-target argument that governs the Cadence phone app does not transfer. */\n  min-height: 32px;\n  padding: 0 12px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  text-decoration: none;\n  white-space: nowrap;\n}\n.cpb-btn:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-btn:disabled { opacity: 0.5; cursor: default; }\n.cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }\n\n/* ---------- errors ---------- */\n\n.cpb-error {\n  background: var(--cpb-danger-bg);\n  color: var(--cpb-danger);\n  border-radius: 7px;\n  padding: 8px 10px;\n  font-size: 12px;\n  line-height: 1.45;\n}\n.cpb-error--bar {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  margin: 8px 14px 0;\n  border-radius: 7px;\n}\n.cpb-error--bar span { flex: 1; }\n.cpb-error-dismiss {\n  background: none;\n  border: none;\n  color: inherit;\n  cursor: pointer;\n  font-size: 12px;\n  padding: 0 2px;\n}\n\n/* ---------- setup / empty ---------- */\n\n.cpb-setup { padding: 40px 20px; text-align: center; color: var(--cpb-dim); }\n.cpb-setup-title { margin: 0 0 6px; font-size: 15px; color: var(--cpb-text); }\n.cpb-setup-body { margin: 0 0 14px; font-size: 13px; max-width: 460px; margin-inline: auto; line-height: 1.5; }\n\n/* ---------- board ---------- */\n\n.cpb-board-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 14px 14px; }\n\n.cpb-board {\n  flex: 1;\n  min-height: 0;\n  display: grid;\n  gap: 10px;\n  align-items: start;\n  overflow-x: auto;\n  /* Columns scroll their own bodies, so the grid must be exactly as tall as the wrap\n     or every column grows to the tallest and the page scrolls instead. */\n  height: 100%;\n}\n\n.cpb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }\n.cpb-chip {\n  display: inline-flex; align-items: center; gap: 6px;\n  padding: 4px 10px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-dim); font-size: 11px; font-family: inherit; cursor: pointer;\n}\n.cpb-chip-count { color: var(--cpb-text); font-weight: 700; }\n\n.cpb-column {\n  display: flex;\n  flex-direction: column;\n  min-height: 0;\n  height: 100%;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 10px;\n  overflow: hidden;\n  transition: box-shadow 0.12s ease, background 0.12s ease;\n}\n.cpb-column--over {\n  box-shadow: inset 0 0 0 2px var(--cpb-accent);\n  background: var(--cpb-accent-soft);\n}\n\n.cpb-column-head {\n  display: flex; align-items: center; gap: 8px;\n  width: 100%;\n  padding: 9px 11px;\n  background: none; border: none; border-bottom: 1px solid var(--cpb-line);\n  color: var(--cpb-text); font-family: inherit; font-size: 12px; font-weight: 650;\n  cursor: pointer; text-align: left;\n}\n.cpb-column-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n.cpb-column-count {\n  color: var(--cpb-dim); font-weight: 700; font-size: 11px;\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 7px;\n}\n.cpb-column-chev { color: var(--cpb-dim); font-size: 10px; }\n\n.cpb-column-body {\n  flex: 1; min-height: 0;\n  overflow-y: auto;\n  padding: 8px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n\n.cpb-column--collapsed .cpb-column-head { justify-content: center; }\n.cpb-column-collapsed {\n  flex: 1; background: none; border: none; cursor: pointer;\n  color: var(--cpb-dim); font-family: inherit; font-size: 11px;\n  display: flex; align-items: center; justify-content: center; padding: 8px 0;\n}\n.cpb-column-collapsed-label { writing-mode: vertical-rl; white-space: nowrap; }\n\n.cpb-column-empty {\n  border: 1px dashed var(--cpb-line);\n  border-radius: 8px;\n  padding: 16px 8px;\n  text-align: center;\n  color: var(--cpb-dim);\n  font-size: 11px;\n}\n.cpb-column-empty--over { border-color: var(--cpb-accent); color: var(--cpb-accent); }\n\n/* ---------- card ---------- */\n\n.cpb-card {\n  background: var(--cpb-card);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 9px 10px;\n  cursor: grab;\n  display: flex; flex-direction: column; gap: 6px;\n  /* The drag image is a snapshot of this element; a transform or filter here shows up\n     in it, so the pressed state is opacity only. */\n}\n.cpb-card:hover { border-color: var(--cpb-accent); }\n.cpb-card:focus-visible { outline: 2px solid var(--cpb-accent); outline-offset: 1px; }\n.cpb-card--dragging { opacity: 0.45; cursor: grabbing; }\n.cpb-card--busy { cursor: default; opacity: 0.75; }\n\n.cpb-card-top { display: flex; align-items: center; gap: 6px; }\n.cpb-card-number { color: var(--cpb-dim); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }\n.cpb-card-draft {\n  color: var(--cpb-dim); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;\n  border: 1px solid var(--cpb-line); border-radius: 3px; padding: 0 4px;\n}\n.cpb-card-priority {\n  margin-left: auto;\n  font-size: 10px; font-weight: 700;\n  border: 1px solid; border-radius: 999px; padding: 0 6px;\n}\n.cpb-card-size {\n  font-size: 10px; font-weight: 700; color: var(--cpb-dim);\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 6px;\n}\n/* `.cpb-card-priority` claims the auto margin when present; without it Size must. */\n.cpb-card-top > .cpb-card-size:nth-child(2) { margin-left: auto; }\n\n.cpb-card-spinner {\n  width: 10px; height: 10px; border-radius: 50%;\n  border: 2px solid var(--cpb-line); border-top-color: var(--cpb-accent);\n  animation: cpb-spin 0.7s linear infinite;\n}\n@keyframes cpb-spin { to { transform: rotate(360deg); } }\n/* A permanent spinner is worse than none for anyone who has asked the OS to stop\n   moving things; the ring stays as a static state marker. */\n@media (prefers-reduced-motion: reduce) {\n  .cpb-card-spinner { animation: none; border-top-color: var(--cpb-accent); }\n}\n\n.cpb-card-title { font-size: 12.5px; line-height: 1.4; }\n\n.cpb-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }\n.cpb-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }\n.cpb-card-label {\n  font-size: 9.5px; font-weight: 600; border-radius: 999px; padding: 1px 6px;\n  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.cpb-card-avatars { display: flex; gap: 2px; flex-shrink: 0; }\n.cpb-card-avatar { width: 16px; height: 16px; border-radius: 50%; }\n\n/* ---------- modal ---------- */\n\n.cpb-overlay {\n  position: fixed; inset: 0; z-index: 40;\n  background: rgba(0, 0, 0, 0.45);\n  display: flex; align-items: center; justify-content: center;\n  padding: 24px;\n}\n.cpb-modal {\n  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;\n  background: var(--cpb-bg); color: var(--cpb-text);\n  border: 1px solid var(--cpb-line); border-radius: 12px;\n  padding: 16px 18px 18px;\n  display: flex; flex-direction: column; gap: 12px;\n}\n.cpb-modal--narrow { max-width: 440px; }\n\n.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }\n.cpb-modal-titles { flex: 1; min-width: 0; }\n.cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }\n.cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }\n.cpb-close {\n  background: var(--cpb-panel); border: 1px solid var(--cpb-line); border-radius: 7px;\n  width: 28px; height: 28px; color: var(--cpb-dim); cursor: pointer; flex-shrink: 0;\n  font-size: 12px; line-height: 1;\n}\n.cpb-close:hover { background: var(--cpb-panel-2); }\n\n.cpb-fields { display: flex; flex-direction: column; gap: 10px; }\n.cpb-field { display: flex; flex-direction: column; gap: 5px; }\n.cpb-field-name { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cpb-dim); }\n.cpb-field-options { display: flex; flex-wrap: wrap; gap: 5px; }\n.cpb-opt {\n  padding: 5px 11px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 11.5px; font-family: inherit; cursor: pointer;\n}\n.cpb-opt:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-opt:disabled { opacity: 0.5; cursor: default; }\n.cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-opt--clear { color: var(--cpb-dim); }\n\n.cpb-body {\n  margin: 0;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 10px 12px;\n  font-size: 11.5px; line-height: 1.55;\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  white-space: pre-wrap; word-break: break-word;\n  max-height: 260px; overflow-y: auto;\n}\n\n/* ---------- comments ---------- */\n\n.cpb-comments { display: flex; flex-direction: column; gap: 8px; }\n.cpb-comments-loading { font-weight: 400; text-transform: none; letter-spacing: 0; }\n.cpb-comments-empty { color: var(--cpb-dim); font-size: 12px; }\n\n/* Capped and scrolled rather than growing the modal: the modal is already\n   `max-height: 86vh`, so an uncapped thread would push the composer — the one control\n   here — below the fold on any issue with a real discussion on it. */\n.cpb-comment-list {\n  display: flex; flex-direction: column; gap: 8px;\n  max-height: 280px; overflow-y: auto;\n  padding-right: 2px;\n}\n\n.cpb-comment {\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 8px 10px;\n}\n.cpb-comment-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }\n.cpb-comment-avatar { width: 16px; height: 16px; border-radius: 50%; }\n.cpb-comment-author { font-size: 11.5px; font-weight: 650; }\n.cpb-comment-time { margin-left: auto; color: var(--cpb-dim); font-size: 10.5px; }\n.cpb-comment-body {\n  font-size: 12px; line-height: 1.55;\n  white-space: pre-wrap; word-break: break-word;\n}\n\n.cpb-composer { display: flex; flex-direction: column; gap: 6px; }\n.cpb-textarea {\n  width: 100%; box-sizing: border-box;\n  padding: 8px 10px; border-radius: 8px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; line-height: 1.5;\n  font-family: inherit; resize: vertical; min-height: 62px;\n}\n.cpb-textarea:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-textarea:disabled { opacity: 0.6; }\n.cpb-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n\n.cpb-open-link { color: var(--cpb-accent); font-size: 12px; text-decoration: none; align-self: flex-start; }\n.cpb-open-link:hover { text-decoration: underline; }\n\n/* ---------- settings form ---------- */\n\n.cpb-label {\n  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;\n  color: var(--cpb-dim); display: flex; align-items: center; gap: 6px;\n}\n.cpb-input {\n  width: 100%; padding: 7px 10px; border-radius: 7px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; font-family: inherit;\n  box-sizing: border-box;\n}\n.cpb-input:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-hint { color: var(--cpb-dim); font-size: 11px; line-height: 1.5; }\n.cpb-hint code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;\n}\n/* A field with its own Paste button beside it — the escape hatch for a host that\n   swallows the paste event. `align-items: stretch` so the button matches the input's\n   height rather than the 32px it would otherwise keep. */\n.cpb-input-row { display: flex; gap: 6px; align-items: stretch; }\n.cpb-input-row .cpb-input { flex: 1; min-width: 0; }\n.cpb-paste { flex-shrink: 0; }\n\n.cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }\n.cpb-tag {\n  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;\n  background: var(--cpb-accent-soft); color: var(--cpb-accent);\n  border-radius: 999px; padding: 1px 6px; text-transform: none;\n}\n.cpb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }\n\n@media (max-width: 640px) {\n  .cpb-search { width: 130px; }\n  .cpb-bar { gap: 8px; }\n}\n";
+const stylesRaw = "/*\n * Every selector is prefixed `cpb-`.\n *\n * These rules are injected into the host document's <head>, not into a shadow root,\n * so an unprefixed `.card` or a bare element selector would restyle claudecodeui\n * itself. There is exactly one element selector in this file and it is scoped under\n * .cpb-root.\n *\n * Colours are CSS custom properties defined on .cpb-root for each theme, so the whole\n * board follows api.context.theme by swapping one class rather than by threading a\n * theme prop through every component.\n */\n\n.cpb-root {\n  --cpb-bg: #ffffff;\n  --cpb-panel: #f6f7f9;\n  --cpb-panel-2: #eceef2;\n  --cpb-card: #ffffff;\n  --cpb-line: rgba(0, 0, 0, 0.12);\n  --cpb-text: #16181d;\n  --cpb-dim: #5c6370;\n  --cpb-accent: #2563eb;\n  --cpb-accent-soft: rgba(37, 99, 235, 0.1);\n  --cpb-danger: #b3261e;\n  --cpb-danger-bg: rgba(179, 38, 30, 0.1);\n\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  background: var(--cpb-bg);\n  color: var(--cpb-text);\n  font-family: ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif;\n  font-size: 13px;\n}\n\n.cpb-root--dark {\n  --cpb-bg: #16181d;\n  --cpb-panel: #1e2128;\n  --cpb-panel-2: #262a33;\n  --cpb-card: #232730;\n  --cpb-line: rgba(255, 255, 255, 0.12);\n  --cpb-text: #e7e9ee;\n  --cpb-dim: #9aa1ae;\n  --cpb-accent: #7aa2f7;\n  --cpb-accent-soft: rgba(122, 162, 247, 0.16);\n  --cpb-danger: #f08a7a;\n  --cpb-danger-bg: rgba(240, 138, 122, 0.14);\n}\n\n/* ---------- toolbar ---------- */\n\n.cpb-bar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--cpb-line);\n  flex-wrap: wrap;\n}\n\n.cpb-bar-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }\n.cpb-bar-right { display: flex; align-items: center; gap: 6px; }\n\n.cpb-h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }\n.cpb-count { color: var(--cpb-dim); font-size: 12px; white-space: nowrap; }\n\n.cpb-search {\n  width: 200px;\n  padding: 6px 10px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n}\n.cpb-search:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n\n.cpb-btn {\n  /* 32px, not 44: this is a desktop web UI inside a host whose own controls are this\n     size, and a board of 44pt buttons would read as a different application. The\n     touch-target argument that governs the Cadence phone app does not transfer. */\n  min-height: 32px;\n  padding: 0 12px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  text-decoration: none;\n  white-space: nowrap;\n}\n.cpb-btn:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-btn:disabled { opacity: 0.5; cursor: default; }\n.cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }\n\n/* ---------- errors ---------- */\n\n.cpb-error {\n  background: var(--cpb-danger-bg);\n  color: var(--cpb-danger);\n  border-radius: 7px;\n  padding: 8px 10px;\n  font-size: 12px;\n  line-height: 1.45;\n}\n.cpb-error--bar {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  margin: 8px 14px 0;\n  border-radius: 7px;\n}\n.cpb-error--bar span { flex: 1; }\n.cpb-error-dismiss {\n  background: none;\n  border: none;\n  color: inherit;\n  cursor: pointer;\n  font-size: 12px;\n  padding: 0 2px;\n}\n\n/* ---------- setup / empty ---------- */\n\n.cpb-setup { padding: 40px 20px; text-align: center; color: var(--cpb-dim); }\n.cpb-setup-title { margin: 0 0 6px; font-size: 15px; color: var(--cpb-text); }\n.cpb-setup-body { margin: 0 0 14px; font-size: 13px; max-width: 460px; margin-inline: auto; line-height: 1.5; }\n\n/* ---------- board ---------- */\n\n.cpb-board-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 14px 14px; }\n\n.cpb-board {\n  flex: 1;\n  min-height: 0;\n  display: grid;\n  gap: 10px;\n  align-items: start;\n  overflow-x: auto;\n  /* Columns scroll their own bodies, so the grid must be exactly as tall as the wrap\n     or every column grows to the tallest and the page scrolls instead. */\n  height: 100%;\n}\n\n.cpb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }\n.cpb-chip {\n  display: inline-flex; align-items: center; gap: 6px;\n  padding: 4px 10px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-dim); font-size: 11px; font-family: inherit; cursor: pointer;\n}\n.cpb-chip-count { color: var(--cpb-text); font-weight: 700; }\n\n.cpb-column {\n  display: flex;\n  flex-direction: column;\n  min-height: 0;\n  height: 100%;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 10px;\n  overflow: hidden;\n  transition: box-shadow 0.12s ease, background 0.12s ease;\n}\n.cpb-column--over {\n  box-shadow: inset 0 0 0 2px var(--cpb-accent);\n  background: var(--cpb-accent-soft);\n}\n\n.cpb-column-head {\n  display: flex; align-items: center; gap: 8px;\n  width: 100%;\n  padding: 9px 11px;\n  background: none; border: none; border-bottom: 1px solid var(--cpb-line);\n  color: var(--cpb-text); font-family: inherit; font-size: 12px; font-weight: 650;\n  cursor: pointer; text-align: left;\n}\n.cpb-column-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n.cpb-column-count {\n  color: var(--cpb-dim); font-weight: 700; font-size: 11px;\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 7px;\n}\n.cpb-column-chev { color: var(--cpb-dim); font-size: 10px; }\n\n.cpb-column-body {\n  flex: 1; min-height: 0;\n  overflow-y: auto;\n  padding: 8px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n\n.cpb-column--collapsed .cpb-column-head { justify-content: center; }\n.cpb-column-collapsed {\n  flex: 1; background: none; border: none; cursor: pointer;\n  color: var(--cpb-dim); font-family: inherit; font-size: 11px;\n  display: flex; align-items: center; justify-content: center; padding: 8px 0;\n}\n.cpb-column-collapsed-label { writing-mode: vertical-rl; white-space: nowrap; }\n\n.cpb-column-empty {\n  border: 1px dashed var(--cpb-line);\n  border-radius: 8px;\n  padding: 16px 8px;\n  text-align: center;\n  color: var(--cpb-dim);\n  font-size: 11px;\n}\n.cpb-column-empty--over { border-color: var(--cpb-accent); color: var(--cpb-accent); }\n\n/* ---------- card ---------- */\n\n.cpb-card {\n  background: var(--cpb-card);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 9px 10px;\n  cursor: grab;\n  display: flex; flex-direction: column; gap: 6px;\n  /* The drag image is a snapshot of this element; a transform or filter here shows up\n     in it, so the pressed state is opacity only. */\n}\n.cpb-card:hover { border-color: var(--cpb-accent); }\n.cpb-card:focus-visible { outline: 2px solid var(--cpb-accent); outline-offset: 1px; }\n.cpb-card--dragging { opacity: 0.45; cursor: grabbing; }\n.cpb-card--busy { cursor: default; opacity: 0.75; }\n\n.cpb-card-top { display: flex; align-items: center; gap: 6px; }\n.cpb-card-number { color: var(--cpb-dim); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }\n.cpb-card-draft {\n  color: var(--cpb-dim); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;\n  border: 1px solid var(--cpb-line); border-radius: 3px; padding: 0 4px;\n}\n.cpb-card-priority {\n  margin-left: auto;\n  font-size: 10px; font-weight: 700;\n  border: 1px solid; border-radius: 999px; padding: 0 6px;\n}\n.cpb-card-size {\n  font-size: 10px; font-weight: 700; color: var(--cpb-dim);\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 6px;\n}\n/* `.cpb-card-priority` claims the auto margin when present; without it Size must. */\n.cpb-card-top > .cpb-card-size:nth-child(2) { margin-left: auto; }\n\n.cpb-card-spinner {\n  width: 10px; height: 10px; border-radius: 50%;\n  border: 2px solid var(--cpb-line); border-top-color: var(--cpb-accent);\n  animation: cpb-spin 0.7s linear infinite;\n}\n@keyframes cpb-spin { to { transform: rotate(360deg); } }\n/* A permanent spinner is worse than none for anyone who has asked the OS to stop\n   moving things; the ring stays as a static state marker. */\n@media (prefers-reduced-motion: reduce) {\n  .cpb-card-spinner { animation: none; border-top-color: var(--cpb-accent); }\n}\n\n.cpb-card-title { font-size: 12.5px; line-height: 1.4; }\n\n.cpb-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }\n.cpb-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }\n.cpb-card-label {\n  font-size: 9.5px; font-weight: 600; border-radius: 999px; padding: 1px 6px;\n  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.cpb-card-avatars { display: flex; gap: 2px; flex-shrink: 0; }\n.cpb-card-avatar { width: 16px; height: 16px; border-radius: 50%; }\n\n/* ---------- modal ---------- */\n\n.cpb-overlay {\n  position: fixed; inset: 0; z-index: 40;\n  background: rgba(0, 0, 0, 0.45);\n  display: flex; align-items: center; justify-content: center;\n  padding: 24px;\n}\n.cpb-modal {\n  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;\n  background: var(--cpb-bg); color: var(--cpb-text);\n  border: 1px solid var(--cpb-line); border-radius: 12px;\n  padding: 16px 18px 18px;\n  display: flex; flex-direction: column; gap: 12px;\n}\n.cpb-modal--narrow { max-width: 440px; }\n\n.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }\n.cpb-modal-titles { flex: 1; min-width: 0; }\n.cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }\n.cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }\n.cpb-close {\n  background: var(--cpb-panel); border: 1px solid var(--cpb-line); border-radius: 7px;\n  width: 28px; height: 28px; color: var(--cpb-dim); cursor: pointer; flex-shrink: 0;\n  font-size: 12px; line-height: 1;\n}\n.cpb-close:hover { background: var(--cpb-panel-2); }\n\n.cpb-fields { display: flex; flex-direction: column; gap: 10px; }\n.cpb-field { display: flex; flex-direction: column; gap: 5px; }\n.cpb-field-name { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cpb-dim); }\n.cpb-field-options { display: flex; flex-wrap: wrap; gap: 5px; }\n.cpb-opt {\n  padding: 5px 11px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 11.5px; font-family: inherit; cursor: pointer;\n}\n.cpb-opt:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-opt:disabled { opacity: 0.5; cursor: default; }\n.cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-opt--clear { color: var(--cpb-dim); }\n\n.cpb-body {\n  margin: 0;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 10px 12px;\n  max-height: 300px; overflow-y: auto;\n}\n\n/* ---------- rendered markdown ---------- */\n\n/*\n * The whole point of this block is that an issue body should read as prose, not as a\n * monospaced dump. Sizes are a shade smaller than the host's, because this all sits\n * inside a modal inside a tab.\n *\n * `:last-child`/`:first-child` margin trimming is what keeps a rendered block from\n * adding padding the container did not ask for — without it every comment bubble\n * gains a stray 8px top and bottom from its own paragraph.\n */\n.cpb-md { font-size: 12.5px; line-height: 1.6; word-break: break-word; }\n.cpb-md > *:first-child { margin-top: 0; }\n.cpb-md > *:last-child { margin-bottom: 0; }\n\n.cpb-md-p { margin: 0 0 8px; }\n\n.cpb-md-h { margin: 14px 0 6px; font-weight: 650; line-height: 1.3; }\n.cpb-md-h1 { font-size: 15px; }\n.cpb-md-h2 { font-size: 14px; }\n.cpb-md-h3 { font-size: 13px; }\n.cpb-md-h4, .cpb-md-h5, .cpb-md-h6 { font-size: 12.5px; color: var(--cpb-dim); }\n\n.cpb-md-link { color: var(--cpb-accent); text-decoration: none; }\n.cpb-md-link:hover { text-decoration: underline; }\n\n.cpb-md-code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  font-size: 0.92em;\n  background: var(--cpb-panel-2);\n  border-radius: 4px;\n  padding: 1px 4px;\n}\n\n.cpb-md-pre {\n  margin: 0 0 8px;\n  background: var(--cpb-panel-2);\n  border: 1px solid var(--cpb-line);\n  border-radius: 6px;\n  padding: 9px 11px;\n  /* Long lines scroll rather than wrap: a wrapped code block is harder to read than a\n     scrolled one, and this must never widen the modal. */\n  overflow-x: auto;\n}\n.cpb-md-pre code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  font-size: 11.5px; line-height: 1.5; white-space: pre;\n}\n\n.cpb-md-ul, .cpb-md-ol { margin: 0 0 8px; padding-left: 20px; }\n.cpb-md-ul li, .cpb-md-ol li { margin: 2px 0; }\n\n/* Task lists carry their own glyph, so they lose the bullet and its indent. */\n.cpb-md-tasks { list-style: none; padding-left: 2px; }\n.cpb-md-task { display: flex; gap: 7px; align-items: flex-start; }\n.cpb-md-tick { flex-shrink: 0; color: var(--cpb-dim); line-height: 1.5; }\n.cpb-md-task--done { color: var(--cpb-dim); }\n.cpb-md-task--done .cpb-md-tick { color: var(--cpb-accent); }\n\n.cpb-md-quote {\n  margin: 0 0 8px;\n  padding: 2px 0 2px 10px;\n  border-left: 3px solid var(--cpb-line);\n  color: var(--cpb-dim);\n}\n\n.cpb-md-hr { margin: 12px 0; border: none; border-top: 1px solid var(--cpb-line); }\n\n.cpb-md-table-wrap { overflow-x: auto; margin: 0 0 8px; }\n.cpb-md-table { border-collapse: collapse; font-size: 11.5px; }\n.cpb-md-table th, .cpb-md-table td {\n  border: 1px solid var(--cpb-line);\n  padding: 4px 8px;\n  text-align: left;\n  vertical-align: top;\n}\n.cpb-md-table th { background: var(--cpb-panel-2); font-weight: 650; }\n\n/* ---------- image thumbnails and lightbox ---------- */\n\n.cpb-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }\n.cpb-thumb {\n  padding: 0; border: 1px solid var(--cpb-line); border-radius: 6px;\n  background: var(--cpb-panel); cursor: zoom-in; overflow: hidden;\n  width: 96px; height: 64px; flex-shrink: 0;\n}\n.cpb-thumb:hover { border-color: var(--cpb-accent); }\n.cpb-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }\n\n/* Above the modal's own z-index of 40 — a picture opened from inside the modal has to\n   sit over it, not behind it. */\n.cpb-lightbox {\n  position: fixed; inset: 0; z-index: 60;\n  background: rgba(0, 0, 0, 0.85);\n  display: flex; align-items: center; justify-content: center;\n  padding: 32px; cursor: zoom-out;\n}\n.cpb-lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: default; }\n.cpb-lightbox-close {\n  position: absolute; top: 14px; right: 16px;\n  width: 32px; height: 32px; border-radius: 8px;\n  background: rgba(255, 255, 255, 0.12); border: none; color: #fff;\n  font-size: 14px; cursor: pointer;\n}\n.cpb-lightbox-close:hover { background: rgba(255, 255, 255, 0.22); }\n.cpb-lightbox-error {\n  background: var(--cpb-bg); color: var(--cpb-text);\n  border-radius: 10px; padding: 20px 24px; text-align: center;\n  font-size: 13px; cursor: default;\n}\n.cpb-lightbox-error a { display: inline-block; margin-top: 8px; color: var(--cpb-accent); font-size: 12px; }\n\n/* ---------- comments ---------- */\n\n.cpb-comments { display: flex; flex-direction: column; gap: 8px; }\n.cpb-comments-loading { font-weight: 400; text-transform: none; letter-spacing: 0; }\n.cpb-comments-empty { color: var(--cpb-dim); font-size: 12px; }\n\n/* Capped and scrolled rather than growing the modal: the modal is already\n   `max-height: 86vh`, so an uncapped thread would push the composer — the one control\n   here — below the fold on any issue with a real discussion on it. */\n.cpb-comment-list {\n  display: flex; flex-direction: column; gap: 8px;\n  max-height: 280px; overflow-y: auto;\n  padding-right: 2px;\n}\n\n.cpb-comment {\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 8px 10px;\n}\n.cpb-comment-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }\n.cpb-comment-avatar { width: 16px; height: 16px; border-radius: 50%; }\n.cpb-comment-author { font-size: 11.5px; font-weight: 650; }\n.cpb-comment-time { margin-left: auto; color: var(--cpb-dim); font-size: 10.5px; }\n.cpb-comment-body {\n  font-size: 12px; line-height: 1.55;\n  white-space: pre-wrap; word-break: break-word;\n}\n\n.cpb-composer { display: flex; flex-direction: column; gap: 6px; }\n.cpb-textarea {\n  width: 100%; box-sizing: border-box;\n  padding: 8px 10px; border-radius: 8px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; line-height: 1.5;\n  font-family: inherit; resize: vertical; min-height: 62px;\n}\n.cpb-textarea:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-textarea:disabled { opacity: 0.6; }\n.cpb-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n\n.cpb-open-link { color: var(--cpb-accent); font-size: 12px; text-decoration: none; align-self: flex-start; }\n.cpb-open-link:hover { text-decoration: underline; }\n\n/* ---------- settings form ---------- */\n\n.cpb-label {\n  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;\n  color: var(--cpb-dim); display: flex; align-items: center; gap: 6px;\n}\n.cpb-input {\n  width: 100%; padding: 7px 10px; border-radius: 7px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; font-family: inherit;\n  box-sizing: border-box;\n}\n.cpb-input:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-hint { color: var(--cpb-dim); font-size: 11px; line-height: 1.5; }\n.cpb-hint code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;\n}\n/* A field with its own Paste button beside it — the escape hatch for a host that\n   swallows the paste event. `align-items: stretch` so the button matches the input's\n   height rather than the 32px it would otherwise keep. */\n.cpb-input-row { display: flex; gap: 6px; align-items: stretch; }\n.cpb-input-row .cpb-input { flex: 1; min-width: 0; }\n.cpb-paste { flex-shrink: 0; }\n\n.cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }\n.cpb-tag {\n  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;\n  background: var(--cpb-accent-soft); color: var(--cpb-accent);\n  border-radius: 999px; padding: 1px 6px; text-transform: none;\n}\n.cpb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }\n\n@media (max-width: 640px) {\n  .cpb-search { width: 130px; }\n  .cpb-bar { gap: 8px; }\n}\n";
 const STYLE_ID = "cpb-plugin-styles";
 if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
   const el2 = document.createElement("style");

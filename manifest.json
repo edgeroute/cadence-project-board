@@ -1,7 +1,7 @@
 {
   "name": "cadence-project-board",
   "displayName": "Project Board",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "GitHub Projects v2 kanban board with drag-and-drop between Status columns, plus Priority and Size editing and a companion /board skill",
   "author": "edgeroute",
   "slot": "tab",

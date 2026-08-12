@@ -2,6 +2,7 @@ import React from 'react';
 import type { ProjectItem, ProjectField } from './types';
 import { itemTitle, fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from './types';
 import { Comments } from './Comments';
+import { RichText } from './RichText';
 
 interface Props {
   item: ProjectItem;
@@ -109,11 +110,12 @@ export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, projectP
         </div>
 
         {content?.body && (
-          // Plain text, deliberately not rendered markdown. Rendering it would mean
-          // shipping a markdown parser and a sanitiser for issue bodies this plugin
-          // does not own — a large surface for a panel whose job is to set two fields.
-          // The link below goes where the full, properly rendered issue lives.
-          <pre className="cpb-body">{content.body.slice(0, 4000)}</pre>
+          // No character cap any more. It used to slice at 4000, which cuts mid-syntax:
+          // a truncated fenced code block leaves the fence unclosed and the parser
+          // swallows everything after it. The box scrolls instead.
+          <div className="cpb-body">
+            <RichText text={content.body} />
+          </div>
         )}
 
         {content?.id && projectPath && (

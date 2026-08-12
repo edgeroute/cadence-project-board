@@ -1,6 +1,7 @@
 import React from 'react';
 import type { IssueComment } from './types';
 import { usePluginAPI } from './PluginContext';
+import { RichText } from './RichText';
 
 /**
  * How long ago, in the coarsest unit that is still true.
@@ -113,10 +114,9 @@ export const Comments: React.FC<Props> = ({ issueId, knownCount, projectPath }) 
                   {ago(c.createdAt)}
                 </time>
               </div>
-              {/* Plain text, as the issue body is. Rendering markdown here would mean
-                  shipping a parser and a sanitiser for content written by other people,
-                  which is a large surface to add for a panel that sets two fields. */}
-              <div className="cpb-comment-body">{c.body}</div>
+              <div className="cpb-comment-body">
+                <RichText text={c.body} />
+              </div>
             </article>
           ))}
           <div ref={endRef} />
