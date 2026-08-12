@@ -80,4 +80,5 @@ dist/                  committed build output
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE), which also carries the third-party notice for
+[`szmidtpiotr/claude-github-issue`](https://github.com/szmidtpiotr/claude-github-issue) and states exactly which parts of this project are derived from it.

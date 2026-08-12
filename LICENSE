@@ -1,0 +1,51 @@
+MIT License
+
+Copyright (c) 2026 Chris Romeo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+---
+
+THIRD-PARTY NOTICES
+
+Portions of this project are derived from claude-github-issue
+(https://github.com/szmidtpiotr/claude-github-issue) by szmidtpiotr, which
+declares the MIT License in its package.json.
+
+That project has no LICENSE file and names no copyright year or holder beyond
+the author field, so no verbatim copyright notice exists to reproduce here.
+This notice is given in its place, identifying the work, its author and the
+licence it declares.
+
+What is derived from it:
+
+  - the build configuration in vite.config.ts and tsconfig.json, and the
+    build scripts in package.json;
+  - the shape of the claudecodeui plugin entry point — the mount/unmount
+    exports, the React context wrapping the host api object, and the
+    injection of inlined CSS at mount;
+  - the HTML5 drag-and-drop arrangement between card and column;
+  - the pattern of installing a companion skill into the user's Claude Code
+    skills directory from the plugin backend.
+
+What is not: the entire data layer is original to this project. The upstream
+plugin boards repository issues by label over the GitHub REST API; this one
+boards GitHub Projects v2 items over GraphQL, which shares no code with it.
+No component, stylesheet or service file was copied.
