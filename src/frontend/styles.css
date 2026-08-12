@@ -1,0 +1,362 @@
+/*
+ * Every selector is prefixed `cpb-`.
+ *
+ * These rules are injected into the host document's <head>, not into a shadow root,
+ * so an unprefixed `.card` or a bare element selector would restyle claudecodeui
+ * itself. There is exactly one element selector in this file and it is scoped under
+ * .cpb-root.
+ *
+ * Colours are CSS custom properties defined on .cpb-root for each theme, so the whole
+ * board follows api.context.theme by swapping one class rather than by threading a
+ * theme prop through every component.
+ */
+
+.cpb-root {
+  --cpb-bg: #ffffff;
+  --cpb-panel: #f6f7f9;
+  --cpb-panel-2: #eceef2;
+  --cpb-card: #ffffff;
+  --cpb-line: rgba(0, 0, 0, 0.12);
+  --cpb-text: #16181d;
+  --cpb-dim: #5c6370;
+  --cpb-accent: #2563eb;
+  --cpb-accent-soft: rgba(37, 99, 235, 0.1);
+  --cpb-danger: #b3261e;
+  --cpb-danger-bg: rgba(179, 38, 30, 0.1);
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--cpb-bg);
+  color: var(--cpb-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+.cpb-root--dark {
+  --cpb-bg: #16181d;
+  --cpb-panel: #1e2128;
+  --cpb-panel-2: #262a33;
+  --cpb-card: #232730;
+  --cpb-line: rgba(255, 255, 255, 0.12);
+  --cpb-text: #e7e9ee;
+  --cpb-dim: #9aa1ae;
+  --cpb-accent: #7aa2f7;
+  --cpb-accent-soft: rgba(122, 162, 247, 0.16);
+  --cpb-danger: #f08a7a;
+  --cpb-danger-bg: rgba(240, 138, 122, 0.14);
+}
+
+/* ---------- toolbar ---------- */
+
+.cpb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--cpb-line);
+  flex-wrap: wrap;
+}
+
+.cpb-bar-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.cpb-bar-right { display: flex; align-items: center; gap: 6px; }
+
+.cpb-h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.cpb-count { color: var(--cpb-dim); font-size: 12px; white-space: nowrap; }
+
+.cpb-search {
+  width: 200px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--cpb-line);
+  background: var(--cpb-panel);
+  color: var(--cpb-text);
+  font-size: 12px;
+  font-family: inherit;
+}
+.cpb-search:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }
+
+.cpb-btn {
+  /* 32px, not 44: this is a desktop web UI inside a host whose own controls are this
+     size, and a board of 44pt buttons would read as a different application. The
+     touch-target argument that governs the Cadence phone app does not transfer. */
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--cpb-line);
+  background: var(--cpb-panel);
+  color: var(--cpb-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.cpb-btn:hover:not(:disabled) { background: var(--cpb-panel-2); }
+.cpb-btn:disabled { opacity: 0.5; cursor: default; }
+.cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }
+.cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* ---------- errors ---------- */
+
+.cpb-error {
+  background: var(--cpb-danger-bg);
+  color: var(--cpb-danger);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cpb-error--bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 14px 0;
+  border-radius: 7px;
+}
+.cpb-error--bar span { flex: 1; }
+.cpb-error-dismiss {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+/* ---------- setup / empty ---------- */
+
+.cpb-setup { padding: 40px 20px; text-align: center; color: var(--cpb-dim); }
+.cpb-setup-title { margin: 0 0 6px; font-size: 15px; color: var(--cpb-text); }
+.cpb-setup-body { margin: 0 0 14px; font-size: 13px; max-width: 460px; margin-inline: auto; line-height: 1.5; }
+
+/* ---------- board ---------- */
+
+.cpb-board-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 14px 14px; }
+
+.cpb-board {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  align-items: start;
+  overflow-x: auto;
+  /* Columns scroll their own bodies, so the grid must be exactly as tall as the wrap
+     or every column grows to the tallest and the page scrolls instead. */
+  height: 100%;
+}
+
+.cpb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.cpb-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--cpb-line); background: var(--cpb-panel);
+  color: var(--cpb-dim); font-size: 11px; font-family: inherit; cursor: pointer;
+}
+.cpb-chip-count { color: var(--cpb-text); font-weight: 700; }
+
+.cpb-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--cpb-panel);
+  border: 1px solid var(--cpb-line);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: box-shadow 0.12s ease, background 0.12s ease;
+}
+.cpb-column--over {
+  box-shadow: inset 0 0 0 2px var(--cpb-accent);
+  background: var(--cpb-accent-soft);
+}
+
+.cpb-column-head {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 9px 11px;
+  background: none; border: none; border-bottom: 1px solid var(--cpb-line);
+  color: var(--cpb-text); font-family: inherit; font-size: 12px; font-weight: 650;
+  cursor: pointer; text-align: left;
+}
+.cpb-column-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cpb-column-count {
+  color: var(--cpb-dim); font-weight: 700; font-size: 11px;
+  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 7px;
+}
+.cpb-column-chev { color: var(--cpb-dim); font-size: 10px; }
+
+.cpb-column-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.cpb-column--collapsed .cpb-column-head { justify-content: center; }
+.cpb-column-collapsed {
+  flex: 1; background: none; border: none; cursor: pointer;
+  color: var(--cpb-dim); font-family: inherit; font-size: 11px;
+  display: flex; align-items: center; justify-content: center; padding: 8px 0;
+}
+.cpb-column-collapsed-label { writing-mode: vertical-rl; white-space: nowrap; }
+
+.cpb-column-empty {
+  border: 1px dashed var(--cpb-line);
+  border-radius: 8px;
+  padding: 16px 8px;
+  text-align: center;
+  color: var(--cpb-dim);
+  font-size: 11px;
+}
+.cpb-column-empty--over { border-color: var(--cpb-accent); color: var(--cpb-accent); }
+
+/* ---------- card ---------- */
+
+.cpb-card {
+  background: var(--cpb-card);
+  border: 1px solid var(--cpb-line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  cursor: grab;
+  display: flex; flex-direction: column; gap: 6px;
+  /* The drag image is a snapshot of this element; a transform or filter here shows up
+     in it, so the pressed state is opacity only. */
+}
+.cpb-card:hover { border-color: var(--cpb-accent); }
+.cpb-card:focus-visible { outline: 2px solid var(--cpb-accent); outline-offset: 1px; }
+.cpb-card--dragging { opacity: 0.45; cursor: grabbing; }
+.cpb-card--busy { cursor: default; opacity: 0.75; }
+
+.cpb-card-top { display: flex; align-items: center; gap: 6px; }
+.cpb-card-number { color: var(--cpb-dim); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cpb-card-draft {
+  color: var(--cpb-dim); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  border: 1px solid var(--cpb-line); border-radius: 3px; padding: 0 4px;
+}
+.cpb-card-priority {
+  margin-left: auto;
+  font-size: 10px; font-weight: 700;
+  border: 1px solid; border-radius: 999px; padding: 0 6px;
+}
+.cpb-card-size {
+  font-size: 10px; font-weight: 700; color: var(--cpb-dim);
+  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 6px;
+}
+/* `.cpb-card-priority` claims the auto margin when present; without it Size must. */
+.cpb-card-top > .cpb-card-size:nth-child(2) { margin-left: auto; }
+
+.cpb-card-spinner {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--cpb-line); border-top-color: var(--cpb-accent);
+  animation: cpb-spin 0.7s linear infinite;
+}
+@keyframes cpb-spin { to { transform: rotate(360deg); } }
+/* A permanent spinner is worse than none for anyone who has asked the OS to stop
+   moving things; the ring stays as a static state marker. */
+@media (prefers-reduced-motion: reduce) {
+  .cpb-card-spinner { animation: none; border-top-color: var(--cpb-accent); }
+}
+
+.cpb-card-title { font-size: 12.5px; line-height: 1.4; }
+
+.cpb-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.cpb-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.cpb-card-label {
+  font-size: 9.5px; font-weight: 600; border-radius: 999px; padding: 1px 6px;
+  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cpb-card-avatars { display: flex; gap: 2px; flex-shrink: 0; }
+.cpb-card-avatar { width: 16px; height: 16px; border-radius: 50%; }
+
+/* ---------- modal ---------- */
+
+.cpb-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.cpb-modal {
+  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;
+  background: var(--cpb-bg); color: var(--cpb-text);
+  border: 1px solid var(--cpb-line); border-radius: 12px;
+  padding: 16px 18px 18px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.cpb-modal--narrow { max-width: 440px; }
+
+.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }
+.cpb-modal-titles { flex: 1; min-width: 0; }
+.cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }
+.cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }
+.cpb-close {
+  background: var(--cpb-panel); border: 1px solid var(--cpb-line); border-radius: 7px;
+  width: 28px; height: 28px; color: var(--cpb-dim); cursor: pointer; flex-shrink: 0;
+  font-size: 12px; line-height: 1;
+}
+.cpb-close:hover { background: var(--cpb-panel-2); }
+
+.cpb-fields { display: flex; flex-direction: column; gap: 10px; }
+.cpb-field { display: flex; flex-direction: column; gap: 5px; }
+.cpb-field-name { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cpb-dim); }
+.cpb-field-options { display: flex; flex-wrap: wrap; gap: 5px; }
+.cpb-opt {
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--cpb-line); background: var(--cpb-panel);
+  color: var(--cpb-text); font-size: 11.5px; font-family: inherit; cursor: pointer;
+}
+.cpb-opt:hover:not(:disabled) { background: var(--cpb-panel-2); }
+.cpb-opt:disabled { opacity: 0.5; cursor: default; }
+.cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }
+.cpb-opt--clear { color: var(--cpb-dim); }
+
+.cpb-body {
+  margin: 0;
+  background: var(--cpb-panel);
+  border: 1px solid var(--cpb-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11.5px; line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 260px; overflow-y: auto;
+}
+
+.cpb-open-link { color: var(--cpb-accent); font-size: 12px; text-decoration: none; align-self: flex-start; }
+.cpb-open-link:hover { text-decoration: underline; }
+
+/* ---------- settings form ---------- */
+
+.cpb-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--cpb-dim); display: flex; align-items: center; gap: 6px;
+}
+.cpb-input {
+  width: 100%; padding: 7px 10px; border-radius: 7px;
+  border: 1px solid var(--cpb-line); background: var(--cpb-panel);
+  color: var(--cpb-text); font-size: 12.5px; font-family: inherit;
+  box-sizing: border-box;
+}
+.cpb-input:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }
+.cpb-hint { color: var(--cpb-dim); font-size: 11px; line-height: 1.5; }
+.cpb-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;
+}
+.cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }
+.cpb-tag {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;
+  background: var(--cpb-accent-soft); color: var(--cpb-accent);
+  border-radius: 999px; padding: 1px 6px; text-transform: none;
+}
+.cpb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+@media (max-width: 640px) {
+  .cpb-search { width: 130px; }
+  .cpb-bar { gap: 8px; }
+}

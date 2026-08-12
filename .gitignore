@@ -1,0 +1,11 @@
+node_modules/
+
+# NOT dist/ — claudecodeui clones this repo and runs the committed bundles.
+# There is no build step on install, so ignoring dist/ ships a plugin that
+# fails with RPC 503 the moment it is enabled. See README.
+
+# Anything that could hold a token, in case one is ever pasted here by mistake.
+.CadenceBoard/
+*.local
+.env
+.env.*
