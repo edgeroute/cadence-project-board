@@ -145,6 +145,8 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           <button className="cpb-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
+        {/* Same split as the item modal: the header stays, the form scrolls. */}
+        <div className="cpb-modal-scroll">
         {error && <div className="cpb-error" role="alert">{error}</div>}
         {clipboardNote && <div className="cpb-error" role="alert">{clipboardNote}</div>}
 
@@ -246,6 +248,7 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
+        </div>
         </div>
       </div>
     </div>

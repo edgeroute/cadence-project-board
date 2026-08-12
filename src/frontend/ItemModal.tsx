@@ -95,38 +95,48 @@ export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, projectP
           </button>
         </div>
 
-        {error && <div className="cpb-error" role="alert">{error}</div>}
+        {/*
+          Everything below the header scrolls; the header does not.
 
-        <div className="cpb-fields">
-          {rows.map((f) => (
-            <FieldRow
-              key={f.id}
-              field={f}
-              currentId={item.singleSelect[f.id]}
-              disabled={busy}
-              onPick={(optionName) => onSetField(f.name, optionName)}
-            />
-          ))}
-        </div>
+          Reported: reaching the bottom of a long thread took the title and the ✕ off
+          the screen, because the modal as a whole was the scrolling box. The way out
+          of a dialog must not be something you scroll back up to find — Escape still
+          closes it, but that is neither discoverable nor what anyone reaches for.
+        */}
+        <div className="cpb-modal-scroll">
+          {error && <div className="cpb-error" role="alert">{error}</div>}
 
-        {content?.body && (
-          // No character cap any more. It used to slice at 4000, which cuts mid-syntax:
-          // a truncated fenced code block leaves the fence unclosed and the parser
-          // swallows everything after it. The box scrolls instead.
-          <div className="cpb-body">
-            <RichText text={content.body} />
+          <div className="cpb-fields">
+            {rows.map((f) => (
+              <FieldRow
+                key={f.id}
+                field={f}
+                currentId={item.singleSelect[f.id]}
+                disabled={busy}
+                onPick={(optionName) => onSetField(f.name, optionName)}
+              />
+            ))}
           </div>
-        )}
 
-        {content?.id && projectPath && (
-          <Comments issueId={content.id} knownCount={content.comments} projectPath={projectPath} />
-        )}
+          {content?.body && (
+            // No character cap any more. It used to slice at 4000, which cuts mid-syntax:
+            // a truncated fenced code block leaves the fence unclosed and the parser
+            // swallows everything after it. The box scrolls instead.
+            <div className="cpb-body">
+              <RichText text={content.body} />
+            </div>
+          )}
 
-        {content && (
-          <a className="cpb-open-link" href={content.url} target="_blank" rel="noreferrer noopener">
-            Open on GitHub ↗
-          </a>
-        )}
+          {content?.id && projectPath && (
+            <Comments issueId={content.id} knownCount={content.comments} projectPath={projectPath} />
+          )}
+
+          {content && (
+            <a className="cpb-open-link" href={content.url} target="_blank" rel="noreferrer noopener">
+              Open on GitHub ↗
+            </a>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -281,32 +281,69 @@
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
 }
+/*
+ * The dialog box itself scrolls nothing — see `.cpb-modal-scroll`.
+ *
+ * `overflow: hidden` rather than `auto`, and the padding moved onto the two children,
+ * so the header can sit outside the scrolling region and stay put. It also keeps the
+ * rounded corners clipping the content that slides under them.
+ */
 .cpb-modal {
-  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;
+  width: 100%; max-width: 620px; max-height: 86vh; overflow: hidden;
   background: var(--cpb-bg); color: var(--cpb-text);
   border: 1px solid var(--cpb-line); border-radius: 12px;
-  padding: 16px 18px 18px;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column;
 }
 .cpb-modal--narrow { max-width: 440px; }
 
 /*
- * Nothing in the modal may be shrunk by the modal.
+ * The pinned header. Never scrolls, never shrinks.
+ *
+ * Reported: at the bottom of a long comment thread the title and the ✕ were gone,
+ * because the modal as a whole was the scroll container and the header scrolled with
+ * everything else. The way out of a dialog has to stay reachable from anywhere in it.
+ */
+.cpb-modal-head {
+  flex-shrink: 0;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--cpb-line);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/*
+ * The scrolling region: everything below the header.
+ *
+ * `min-height: 0` is the load-bearing part. A flex item's default `min-height: auto`
+ * refuses to shrink below its content, so without it this box grows to its full
+ * content height, the modal's `max-height` clips it, and the bottom of the thread
+ * becomes unreachable — scrolling nothing, because the overflow is on a box that was
+ * never allowed to be smaller than its contents.
+ */
+.cpb-modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 18px 18px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/*
+ * Nothing inside the scrolling region may be shrunk by it.
  *
  * This is the general form of the bug that made the issue body collapse to a one-word
- * sliver. `.cpb-modal` is a flex column with a `max-height`, so any child that can
- * shrink will, once the content exceeds it — and a child becomes shrinkable simply by
- * having `overflow` set to anything but `visible`, because that resolves its
- * `min-height: auto` to 0. Two children already qualify (the body panel and, through
- * its own wrapper, the comment list), and the next scrollable panel added here would
- * qualify silently.
+ * sliver. The scroll region is a flex column with a bounded height, so any child that
+ * *can* shrink will — and a child becomes shrinkable simply by having `overflow` set
+ * to anything but `visible`, because that resolves its `min-height: auto` to 0. The
+ * body panel and the comment list both qualify, and the next scrollable panel added
+ * here would qualify silently.
  *
- * The modal itself carries `overflow-y: auto`, so the honest overflow behaviour is
- * "the dialog scrolls", not "one panel inside it is crushed".
+ * The honest overflow behaviour is "this region scrolls", not "one panel inside it is
+ * crushed to fit".
  */
-.cpb-modal > * { flex-shrink: 0; }
+.cpb-modal-scroll > * { flex-shrink: 0; }
 
-.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }
 .cpb-modal-titles { flex: 1; min-width: 0; }
 .cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }
 .cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }
