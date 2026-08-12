@@ -7916,7 +7916,6 @@ const SuggestionsPanel = ({
   current,
   selected,
   applying,
-  applied,
   onToggle,
   onToggleAll,
   onApply,
@@ -7957,7 +7956,7 @@ const SuggestionsPanel = ({
         }
       ), /* @__PURE__ */ React.createElement("div", { className: "cpb-suggest-body" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-suggest-title" }, s.number !== null && /* @__PURE__ */ React.createElement("span", { className: "cpb-card-number" }, "#", s.number), " ", s.title), /* @__PURE__ */ React.createElement("div", { className: "cpb-suggest-change" }, /* @__PURE__ */ React.createElement(Delta, { label: "Priority", from: (now == null ? void 0 : now.priority) ?? null, to: s.priority }), /* @__PURE__ */ React.createElement(Delta, { label: "Size", from: (now == null ? void 0 : now.size) ?? null, to: s.size })), /* @__PURE__ */ React.createElement("div", { className: "cpb-suggest-reason" }, s.reason)));
     })))),
-    /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-foot" }, /* @__PURE__ */ React.createElement("span", { className: "cpb-hint" }, applying ? `Applying ${applied} of ${selected.size}…` : `${selected.size} selected · writes the project field and the matching label`), /* @__PURE__ */ React.createElement("div", { className: "cpb-actions" }, /* @__PURE__ */ React.createElement("button", { className: "cpb-btn", onClick: onClose, disabled: applying }, "Cancel"), /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-foot" }, /* @__PURE__ */ React.createElement("span", { className: "cpb-hint" }, applying ? `Applying ${selected.size} change${selected.size === 1 ? "" : "s"}…` : `${selected.size} selected · writes the project field and the matching label`), /* @__PURE__ */ React.createElement("div", { className: "cpb-actions" }, /* @__PURE__ */ React.createElement("button", { className: "cpb-btn", onClick: onClose, disabled: applying }, "Cancel"), /* @__PURE__ */ React.createElement(
       "button",
       {
         className: "cpb-btn cpb-btn--primary",
@@ -7987,7 +7986,6 @@ const App = () => {
   const [suggestions, setSuggestions] = React.useState(null);
   const [picked, setPicked] = React.useState(/* @__PURE__ */ new Set());
   const [applying, setApplying] = React.useState(false);
-  const [appliedCount, setAppliedCount] = React.useState(0);
   const [collapsed, setCollapsed] = React.useState(/* @__PURE__ */ new Set());
   const [pending, setPending] = React.useState(/* @__PURE__ */ new Set());
   const [selectedId, setSelectedId] = React.useState(null);
@@ -8194,21 +8192,36 @@ const App = () => {
     }
   }, [api, board, projectPath, sorted]);
   const applySuggestions = React.useCallback(async () => {
-    if (!suggestions) return;
+    if (!suggestions || !projectPath) return;
     setApplying(true);
-    setAppliedCount(0);
-    let done = 0;
+    const writes = [];
     for (const s of suggestions.suggestions) {
       if (!picked.has(s.itemId)) continue;
-      if (s.priority) await applyField(s.itemId, PRIORITY_FIELD, s.priority);
-      if (s.size) await applyField(s.itemId, SIZE_FIELD, s.size);
-      done += 1;
-      setAppliedCount(done);
+      if (s.priority) writes.push({ itemId: s.itemId, field: PRIORITY_FIELD, option: s.priority });
+      if (s.size) writes.push({ itemId: s.itemId, field: SIZE_FIELD, option: s.size });
     }
-    setApplying(false);
-    setSuggestions(null);
-    setPicked(/* @__PURE__ */ new Set());
-  }, [applyField, picked, suggestions]);
+    try {
+      const res = await api.rpc("POST", `/fields?path=${encodeURIComponent(projectPath)}`, { writes });
+      if (!res.ok) {
+        setError(res.error || "Could not apply the suggestions.");
+      } else {
+        const failed = (res.outcomes ?? []).filter((o) => !o.ok);
+        const warned = (res.outcomes ?? []).filter((o) => o.ok && o.warning);
+        if (failed.length) {
+          setError(`${failed.length} of ${res.outcomes.length} changes failed — ${failed[0].error}`);
+        } else if (warned.length) {
+          setError(`Applied, but ${warned.length} label${warned.length === 1 ? "" : "s"} could not be updated.`);
+        }
+      }
+    } catch (e) {
+      setError(e.message || "Could not apply the suggestions.");
+    } finally {
+      setApplying(false);
+      setSuggestions(null);
+      setPicked(/* @__PURE__ */ new Set());
+      void load(true);
+    }
+  }, [api, load, picked, projectPath, suggestions]);
   const currentValues = React.useMemo(() => {
     var _a, _b;
     const map = /* @__PURE__ */ new Map();
@@ -8302,7 +8315,6 @@ const App = () => {
       current: currentValues,
       selected: picked,
       applying,
-      applied: appliedCount,
       onToggle: (id2) => setPicked((prev) => {
         const next = new Set(prev);
         if (next.has(id2)) next.delete(id2);

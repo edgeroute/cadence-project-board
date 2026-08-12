@@ -49,6 +49,10 @@ The **project field is the source of truth**, and a matching label is mirrored o
 
 Projects v2 field values are reachable from an issue and GitHub shows them in the issue sidebar, but they are **not searchable** — there is no `is:issue priority:P0`. A label is, so setting `Priority` to `P0` also puts `priority:P0` on the issue: it shows in the issue list, it can be searched, and it survives the item being removed from the project.
 
+Applying suggestions goes through `/fields`, which resolves every change against **one** board snapshot and sends the field writes as aliased mutations in one GraphQL document. Doing it through the single-write route instead meant a full board refetch per write — two writes per item, so a seventeen-item apply refetched the board thirty-four times and took about ten seconds per issue. It is now around 2.5s per issue when both values change, and a few hundred milliseconds when only the fields move.
+
+Writes stay serial. GitHub's secondary rate limits treat parallel mutations from one token as abuse, and a batch that trips them fails halfway with some issues written and some not.
+
 The mirror is one-directional. Nothing here ever reads a label back to decide a field's value, so there is one source of truth rather than two that can drift — on any disagreement the field wins and the next write re-syncs the label. Labels are namespaced by field name (`priority:`, `size:`) so setting a value can safely remove the sibling options' labels without touching anything else you have called `M`. `Status` is deliberately not mirrored: it is what the columns *are*, and a `status:Backlog` label on every issue would be noise.
 
 ## What it does

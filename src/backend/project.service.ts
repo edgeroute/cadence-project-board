@@ -17,7 +17,12 @@ export class GitHubError extends Error {
 
 interface GraphQLResponse<T> {
   data?: T;
-  errors?: Array<{ message: string; type?: string }>;
+  /**
+   * `path` names the response field the error belongs to. On a single-operation document
+   * it is noise; on the aliased multi-mutation documents `setManySingleSelect` builds it
+   * is what tells one failed write apart from nineteen that succeeded.
+   */
+  errors?: Array<{ message: string; type?: string; path?: unknown[] }>;
 }
 
 /**
@@ -66,6 +71,66 @@ async function graphql<T>(token: string, query: string, variables: Record<string
 
   if (!json.data) throw new GitHubError(`GitHub returned no data (${res.status}).`, res.status);
   return json.data;
+}
+
+/**
+ * A GraphQL call whose per-field errors are returned rather than thrown.
+ *
+ * `graphql` above collapses any `errors` array into one thrown `GitHubError` and drops
+ * `data` on the floor. For a single-operation document that is exactly right. For a
+ * document carrying twenty aliased mutations it is not: GraphQL answers a partly-failed
+ * document with `200 OK`, the aliases that succeeded under `data`, and an `errors` array
+ * whose `path` names the aliases that did not. Throwing there reports twenty failures
+ * when nineteen writes landed — and a caller that believes a write failed will skip the
+ * follow-up work that write needed, so the board and the labels drift apart.
+ *
+ * Errors that are not attributable to one alias — a bad token, an unparseable document,
+ * a rate limit — still throw, because they are not partial in any useful sense.
+ */
+async function graphqlPartial(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>
+): Promise<{ failedAliases: Map<string, string> }> {
+  let res: Response;
+  try {
+    res = await fetch(GRAPHQL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/vnd.github+json'
+      },
+      body: JSON.stringify({ query, variables })
+    });
+  } catch (e) {
+    throw new GitHubError(`Could not reach GitHub: ${(e as Error).message}`);
+  }
+
+  if (res.status === 401) throw new GitHubError('GitHub rejected the token (401). Check it in Settings.', 401);
+
+  const json = (await res.json().catch(() => null)) as GraphQLResponse<unknown> | null;
+  if (!json) throw new GitHubError(`GitHub returned an unreadable response (${res.status}).`, res.status);
+
+  const failedAliases = new Map<string, string>();
+  const unattributable: string[] = [];
+
+  for (const error of json.errors ?? []) {
+    if (error.type === 'INSUFFICIENT_SCOPES') {
+      throw new GitHubError(
+        'This token cannot read Projects. It needs a classic personal access token with both `repo` and `project` scopes — fine-grained tokens cannot access user-owned projects at all.',
+        403
+      );
+    }
+    const alias = Array.isArray(error.path) && typeof error.path[0] === 'string' ? error.path[0] : null;
+    if (alias) failedAliases.set(alias, error.message);
+    else unattributable.push(error.message);
+  }
+
+  if (unattributable.length) throw new GitHubError(unattributable.join('; '), res.status);
+  if (!json.data && !failedAliases.size) throw new GitHubError(`GitHub returned no data (${res.status}).`, res.status);
+
+  return { failedAliases };
 }
 
 /**
@@ -416,23 +481,91 @@ export async function addComment(
 }
 
 /**
- * Set — or unset — one single-select field on one item.
+ * One field change.
  *
  * A null `optionId` is a real operation, not an error case: dragging a card back to
- * "No Status" has to clear the field, and `updateProjectV2ItemFieldValue` has no way
- * to express "no value". `clearProjectV2ItemFieldValue` is a separate mutation, which
- * is why this takes the branch rather than the caller.
+ * "No Status" has to clear the field, and `updateProjectV2ItemFieldValue` has no way to
+ * express "no value". `clearProjectV2ItemFieldValue` is a separate mutation, which is why
+ * `setManySingleSelect` takes that branch per write rather than making the caller do it.
  */
-export async function setSingleSelect(
+export interface SingleSelectWrite {
+  itemId: string;
+  fieldId: string;
+  optionId: string | null;
+}
+
+/**
+ * How many mutations go in one document.
+ *
+ * GraphQL places no limit on aliased root fields, but Projects v2 scores a document
+ * against a rate-limit budget and a large enough one is rejected outright. Twenty is
+ * comfortably inside it and still turns a seventeen-item apply into two requests.
+ */
+const MUTATION_CHUNK = 20;
+
+/**
+ * Set many single-select values in as few requests as possible.
+ *
+ * A GraphQL document may carry any number of root mutations under aliases, and they run
+ * in the order written. So 34 writes that were 34 round trips — about ten seconds of
+ * nothing but latency — become two.
+ *
+ * Set and clear are different mutations, so a document mixes both, and each alias is
+ * `w<index>` against the **caller's** array. That indexing is what makes a partial
+ * failure attributable: a partly-failed document comes back `200 OK` with the aliases
+ * that worked under `data` and an `errors` array naming the paths that did not, so the
+ * caller learns exactly which of its writes landed instead of inferring it from one
+ * thrown error.
+ */
+export async function setManySingleSelect(
   config: ResolvedConfig,
   projectId: string,
-  itemId: string,
-  fieldId: string,
-  optionId: string | null
-): Promise<void> {
-  if (optionId === null) {
-    await graphql(config.token, CLEAR_FIELD, { projectId, itemId, fieldId });
-    return;
+  writes: SingleSelectWrite[]
+): Promise<{ failures: Map<number, string> }> {
+  const failures = new Map<number, string>();
+
+  for (let start = 0; start < writes.length; start += MUTATION_CHUNK) {
+    const chunk = writes.slice(start, start + MUTATION_CHUNK);
+    const params: string[] = ['$projectId:ID!'];
+    const body: string[] = [];
+    const variables: Record<string, unknown> = { projectId };
+
+    chunk.forEach((w, i) => {
+      const n = start + i;
+      params.push(`$i${n}:ID!`, `$f${n}:ID!`);
+      variables[`i${n}`] = w.itemId;
+      variables[`f${n}`] = w.fieldId;
+      if (w.optionId === null) {
+        body.push(
+          `w${n}: clearProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$i${n}, fieldId:$f${n}}) { projectV2Item { id } }`
+        );
+      } else {
+        params.push(`$o${n}:String!`);
+        variables[`o${n}`] = w.optionId;
+        body.push(
+          `w${n}: updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$i${n}, fieldId:$f${n}, value:{singleSelectOptionId:$o${n}}}) { projectV2Item { id } }`
+        );
+      }
+    });
+
+    try {
+      const { failedAliases } = await graphqlPartial(
+        config.token,
+        `mutation(${params.join(', ')}) {\n${body.join('\n')}\n}`,
+        variables
+      );
+      for (const [alias, message] of failedAliases) {
+        const n = Number(alias.slice(1));
+        if (Number.isInteger(n)) failures.set(n, message);
+      }
+    } catch (e) {
+      // A whole chunk failing — a bad token, a rate limit, an unparseable document — is
+      // not attributable to any one write, so all of them are reported failed rather than
+      // letting the caller believe some subset landed.
+      const message = (e as Error).message;
+      chunk.forEach((_, i) => failures.set(start + i, message));
+    }
   }
-  await graphql(config.token, SET_FIELD, { projectId, itemId, fieldId, optionId });
+
+  return { failures };
 }

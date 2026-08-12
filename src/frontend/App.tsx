@@ -44,7 +44,6 @@ export const App: React.FC = () => {
   const [suggestions, setSuggestions] = React.useState<PrioritizeResult | null>(null);
   const [picked, setPicked] = React.useState<Set<string>>(new Set());
   const [applying, setApplying] = React.useState(false);
-  const [appliedCount, setAppliedCount] = React.useState(0);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const [pending, setPending] = React.useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -335,30 +334,64 @@ export const App: React.FC = () => {
   }, [api, board, projectPath, sorted]);
 
   /**
-   * Write the ticked suggestions.
+   * Write the ticked suggestions, in one request.
    *
-   * Sequentially, through the same `applyField` a drag uses — so each write gets the
-   * optimistic patch, the rollback, and the label mirror for free, and a failure part
-   * way through leaves the earlier writes standing rather than half-applying something
-   * that claims to be atomic. GitHub has no batch mutation for this, so a parallel fan
-   * out would only trade a progress count for rate-limit risk.
+   * This used to loop over `applyField` — the same call a drag makes — so that each write
+   * got the optimistic patch, the rollback and the label mirror for free. It was tidy and
+   * it was far too slow: every one of those calls refetched the entire board from GitHub
+   * to resolve ids that were identical each time, and there are two writes per item, so
+   * seventeen items meant thirty-four board fetches and about ten seconds per issue.
+   *
+   * `/fields` resolves against one snapshot and applies them all. The board is refreshed
+   * once at the end rather than patched per write, because after a batch the server's
+   * answer is cheaper and more truthful than replaying every change locally.
+   *
+   * Writes are still serial — on the server now, and for the same reason as before:
+   * GitHub's secondary rate limits treat parallel mutations as abuse.
    */
   const applySuggestions = React.useCallback(async () => {
-    if (!suggestions) return;
+    if (!suggestions || !projectPath) return;
     setApplying(true);
-    setAppliedCount(0);
-    let done = 0;
+
+    const writes: { itemId: string; field: string; option: string }[] = [];
     for (const s of suggestions.suggestions) {
       if (!picked.has(s.itemId)) continue;
-      if (s.priority) await applyField(s.itemId, PRIORITY_FIELD, s.priority);
-      if (s.size) await applyField(s.itemId, SIZE_FIELD, s.size);
-      done += 1;
-      setAppliedCount(done);
+      if (s.priority) writes.push({ itemId: s.itemId, field: PRIORITY_FIELD, option: s.priority });
+      if (s.size) writes.push({ itemId: s.itemId, field: SIZE_FIELD, option: s.size });
     }
-    setApplying(false);
-    setSuggestions(null);
-    setPicked(new Set());
-  }, [applyField, picked, suggestions]);
+
+    try {
+      const res = (await api.rpc('POST', `/fields?path=${encodeURIComponent(projectPath)}`, { writes })) as {
+        ok?: boolean;
+        error?: string;
+        outcomes?: { itemId: string; field: string; ok: boolean; error?: string; warning?: string }[];
+      };
+
+      if (!res.ok) {
+        setError(res.error || 'Could not apply the suggestions.');
+      } else {
+        // One line naming what failed, rather than a message per item: on a batch this
+        // size a stack of identical errors buries the count of what did land.
+        const failed = (res.outcomes ?? []).filter((o) => !o.ok);
+        const warned = (res.outcomes ?? []).filter((o) => o.ok && o.warning);
+        if (failed.length) {
+          setError(`${failed.length} of ${res.outcomes!.length} changes failed — ${failed[0].error}`);
+        } else if (warned.length) {
+          setError(`Applied, but ${warned.length} label${warned.length === 1 ? '' : 's'} could not be updated.`);
+        }
+      }
+    } catch (e) {
+      setError((e as Error).message || 'Could not apply the suggestions.');
+    } finally {
+      setApplying(false);
+      setSuggestions(null);
+      setPicked(new Set());
+      // `fresh`, not the cache: the writes just invalidated it server-side, and a batch
+      // is exactly the case where showing stale values back to the reader would look
+      // like the apply silently did nothing.
+      void load(true);
+    }
+  }, [api, load, picked, projectPath, suggestions]);
 
   /** What the board holds now, for the panel's old → new column. */
   const currentValues = React.useMemo(() => {
@@ -511,7 +544,6 @@ export const App: React.FC = () => {
           current={currentValues}
           selected={picked}
           applying={applying}
-          applied={appliedCount}
           onToggle={(id) =>
             setPicked((prev) => {
               const next = new Set(prev);

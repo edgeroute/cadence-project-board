@@ -10,6 +10,7 @@ import * as cache from './cache';
 import * as labelService from './label.service';
 import * as aiService from './ai.service';
 import { fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from '../frontend/types';
+import type { ProjectField } from '../frontend/types';
 
 /**
  * Copy the companion skill into the reader's Claude Code skills directory.
@@ -149,85 +150,202 @@ const WRITABLE = [STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD];
  *
  * A null/empty `option` clears the field, which is how a card returns to "No Status".
  */
+/** One requested change, as it arrives from the board, the modal, or the skill. */
+interface FieldWrite {
+  itemId?: string;
+  field?: string;
+  option?: string | null;
+}
+
+/** What became of one requested change. */
+interface WriteOutcome {
+  itemId: string;
+  field: string;
+  ok: boolean;
+  error?: string;
+  warning?: string;
+}
+
+/**
+ * Apply a set of changes against **one** board snapshot.
+ *
+ * The snapshot is the point. Every write needs the same three things — the project id,
+ * the field's id, and the option's id — and none of them can change while a batch is in
+ * flight, so fetching the board once and reusing it is exactly as correct as fetching it
+ * per write and around a second cheaper each time.
+ *
+ * Writes run in series rather than concurrently. GitHub's secondary rate limits treat
+ * parallel mutations from one token as abuse, and a batch that trips them fails halfway
+ * through with some issues written and some not — a worse outcome than taking longer.
+ */
+async function applyWrites(
+  projectPath: string,
+  writes: FieldWrite[]
+): Promise<{ outcomes: WriteOutcome[] } | { error: string; status: number }> {
+  const config = await configService.readConfig(projectPath);
+  // Straight from GitHub rather than from cache: this resolves the ids the mutations are
+  // about to be issued against, and a stale option id fails in a way that reads like the
+  // board is broken rather than out of date.
+  const board = await projectService.fetchBoard(config);
+  cache.set(projectPath, board);
+
+  // ---- resolve every write against the snapshot before anything is sent -------------
+  const outcomes: WriteOutcome[] = [];
+  const resolved: { outcomeIndex: number; itemId: string; field: ProjectField; optionId: string | null }[] = [];
+
+  for (const write of writes) {
+    if (!write.itemId) return { error: 'itemId is required.', status: 400 };
+    if (!write.field) return { error: 'field is required.', status: 400 };
+
+    const fieldName = WRITABLE.find((f) => f.toLowerCase() === write.field!.toLowerCase());
+    if (!fieldName) {
+      return { error: `"${write.field}" is not an editable field. Try: ${WRITABLE.join(', ')}.`, status: 400 };
+    }
+
+    const outcomeIndex = outcomes.length;
+    outcomes.push({ itemId: write.itemId, field: fieldName, ok: true });
+
+    const field = fieldByName(board.fields, fieldName);
+    if (!field) {
+      outcomes[outcomeIndex] = { itemId: write.itemId, field: fieldName, ok: false, error: `This project has no "${fieldName}" field.` };
+      continue;
+    }
+
+    let optionId: string | null = null;
+    if (write.option) {
+      const wanted = write.option.trim().toLowerCase();
+      const match = field.options.find((o) => o.name.toLowerCase() === wanted || o.id === write.option);
+      if (!match) {
+        const names = field.options.map((o) => o.name).join(', ');
+        outcomes[outcomeIndex] = { itemId: write.itemId, field: fieldName, ok: false, error: `"${write.option}" is not a ${fieldName}. Try: ${names}.` };
+        continue;
+      }
+      optionId = match.id;
+    }
+
+    resolved.push({ outcomeIndex, itemId: write.itemId, field, optionId });
+  }
+
+  if (!resolved.length) return { outcomes };
+
+  // ---- the field writes, in one document per twenty ---------------------------------
+  const { failures } = await projectService.setManySingleSelect(
+    config,
+    board.projectId,
+    resolved.map((r) => ({ itemId: r.itemId, fieldId: r.field.id, optionId: r.optionId }))
+  );
+
+  const landed = resolved.filter((r, i) => {
+    const failure = failures.get(i);
+    if (failure === undefined) return true;
+    outcomes[r.outcomeIndex] = { itemId: r.itemId, field: r.field.name, ok: false, error: failure };
+    return false;
+  });
+
+  cache.invalidate(projectPath);
+  if (!landed.length) return { outcomes };
+
+  /*
+    Mirror the values onto the issues as labels — see `label.service`.
+
+    **Grouped by issue, not by write.** An apply sets Priority and Size on the same issue,
+    and mirroring each separately meant two round trips to the same endpoint on the same
+    issue. Grouping also makes the "what does this issue already carry?" question answerable
+    once, from the snapshot, rather than once per field against a view the previous mirror
+    has already invalidated.
+
+    **Status is deliberately not mirrored.** Status is the board's own axis: it is what the
+    columns *are*, every item has one, and a `status:Backlog` label on every issue in the
+    repository would be noise rather than information. Priority and Size are the two a
+    reader wants to find from the issue list, and the two that are usually unset.
+
+    **A mirror failure does not fail the write.** The field write already succeeded and is
+    the source of truth; answering with an error would tell the reader their change did not
+    happen and invite them to repeat a write that did. It comes back as a warning beside
+    `ok: true` instead, so the board updates and the reader still learns the label is out
+    of step.
+  */
+  const byItem = new Map<string, typeof landed>();
+  for (const r of landed) {
+    if (r.field.name === STATUS_FIELD) continue;
+    const list = byItem.get(r.itemId);
+    if (list) list.push(r);
+    else byItem.set(r.itemId, [r]);
+  }
+
+  for (const [itemId, writesForItem] of byItem) {
+    const content = board.items.find((i) => i.id === itemId)?.content;
+    if (!content?.number || !content.repository) continue;
+
+    try {
+      await labelService.mirrorIssueLabels(
+        config,
+        content.repository,
+        content.number,
+        writesForItem.map((r) => ({
+          fieldName: r.field.name,
+          optionName: r.optionId ? r.field.options.find((o) => o.id === r.optionId)?.name ?? null : null,
+          allOptionNames: r.field.options.map((o) => o.name)
+        })),
+        // The snapshot's own label list, so only labels actually present are touched.
+        (content.labels ?? []).map((l) => l.name)
+      );
+    } catch (e) {
+      const message = `Saved, but the matching label could not be updated: ${(e as Error).message}`;
+      for (const r of writesForItem) outcomes[r.outcomeIndex].warning = message;
+    }
+  }
+
+  return { outcomes };
+}
+
+/**
+ * Move a card, or set its Priority or Size.
+ *
+ * The request names the field and the option by **name**, and this resolves both to
+ * ids against the live board. That is a round trip the frontend could have saved by
+ * sending ids it already holds — and it is worth paying, because it is what keeps the
+ * skill and the board honest to the same board: `/board move 216 ready` says "ready",
+ * not `61e4505c`, and both paths land in this one resolution.
+ *
+ * A null/empty `option` clears the field, which is how a card returns to "No Status".
+ */
 async function handleSetField(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const projectPath = query(req)['path'] ?? '';
   if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
 
-  const body = JSON.parse(await readBody(req)) as {
-    itemId?: string;
-    field?: string;
-    option?: string | null;
-  };
-  if (!body.itemId) return sendJson(res, 400, { error: 'itemId is required.' });
-  if (!body.field) return sendJson(res, 400, { error: 'field is required.' });
+  const body = JSON.parse(await readBody(req)) as FieldWrite;
+  const result = await applyWrites(projectPath, [body]);
+  if ('error' in result) return sendJson(res, result.status, { error: result.error });
 
-  const fieldName = WRITABLE.find((f) => f.toLowerCase() === body.field!.toLowerCase());
-  if (!fieldName) {
-    return sendJson(res, 400, { error: `"${body.field}" is not an editable field. Try: ${WRITABLE.join(', ')}.` });
-  }
+  const [outcome] = result.outcomes;
+  if (!outcome.ok) return sendJson(res, 200, { error: outcome.error });
+  sendJson(res, 200, outcome.warning ? { ok: true, warning: outcome.warning } : { ok: true });
+}
 
-  const config = await configService.readConfig(projectPath);
-  // Straight from GitHub rather than from cache: this resolves the ids a mutation is
-  // about to be issued against, and a stale option id fails in a way that reads like
-  // the board is broken rather than out of date.
-  const board = await projectService.fetchBoard(config);
-  cache.set(projectPath, board);
+/**
+ * Apply many changes at once — what Apply in the suggestions panel calls.
+ *
+ * This exists because the single-write route is the wrong shape for a batch, not because
+ * it was wrong. Applying 17 items through it meant 34 requests, each refetching the whole
+ * board to resolve ids that were identical every time: around ten seconds per issue, most
+ * of it spent re-reading a board that had not changed.
+ *
+ * One partial write does not abort the rest. A batch that stopped at the first failure
+ * would leave the reader with an unknown number of items applied and no way to tell which,
+ * so every requested change is attempted and each reports its own outcome.
+ */
+async function handleSetFields(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const projectPath = query(req)['path'] ?? '';
+  if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
 
-  const field = fieldByName(board.fields, fieldName);
-  if (!field) {
-    return sendJson(res, 200, { error: `This project has no "${fieldName}" field.` });
-  }
+  const body = JSON.parse(await readBody(req)) as { writes?: FieldWrite[] };
+  if (!Array.isArray(body.writes)) return sendJson(res, 400, { error: 'writes must be an array.' });
+  if (!body.writes.length) return sendJson(res, 200, { ok: true, outcomes: [] });
 
-  let optionId: string | null = null;
-  if (body.option) {
-    const wanted = body.option.trim().toLowerCase();
-    const match = field.options.find((o) => o.name.toLowerCase() === wanted || o.id === body.option);
-    if (!match) {
-      const names = field.options.map((o) => o.name).join(', ');
-      return sendJson(res, 200, { error: `"${body.option}" is not a ${fieldName}. Try: ${names}.` });
-    }
-    optionId = match.id;
-  }
-
-  await projectService.setSingleSelect(config, board.projectId, body.itemId, field.id, optionId);
-  cache.invalidate(projectPath);
-
-  /*
-    Mirror the value onto the issue as a label — see `label.service`.
-
-    **Status is deliberately not mirrored.** Status is the board's own axis: it is what
-    the columns *are*, every item has one, and a `status:Backlog` label on every issue in
-    the repository would be noise rather than information. Priority and Size are the two
-    that a reader wants to find from the issue list, and the two that are usually unset.
-
-    **A mirror failure does not fail the request.** The field write above already
-    succeeded and is the source of truth; answering with an error would tell the reader
-    their change did not happen and invite them to repeat a write that did. It comes back
-    as a warning beside `ok: true` instead, so the board updates and the reader still
-    learns the label is out of step.
-  */
-  let warning: string | undefined;
-  if (fieldName !== STATUS_FIELD) {
-    const item = board.items.find((i) => i.id === body.itemId);
-    const content = item?.content;
-    if (content?.number && content.repository) {
-      const optionName = optionId ? field.options.find((o) => o.id === optionId)?.name ?? null : null;
-      try {
-        await labelService.mirrorFieldToLabels(
-          config,
-          content.repository,
-          content.number,
-          field.name,
-          optionName,
-          field.options.map((o) => o.name)
-        );
-      } catch (e) {
-        warning = `Saved, but the matching label could not be updated: ${(e as Error).message}`;
-      }
-    }
-  }
-
-  sendJson(res, 200, warning ? { ok: true, warning } : { ok: true });
+  const result = await applyWrites(projectPath, body.writes);
+  if ('error' in result) return sendJson(res, result.status, { error: result.error });
+  sendJson(res, 200, { ok: true, outcomes: result.outcomes });
 }
 
 /**
@@ -313,6 +431,7 @@ const server = http.createServer((req, res) => {
     if (method === 'POST' && pathname === '/config') return handlePostConfig(req, res);
     if (method === 'GET' && pathname === '/board') return handleGetBoard(req, res);
     if (method === 'POST' && pathname === '/field') return handleSetField(req, res);
+    if (method === 'POST' && pathname === '/fields') return handleSetFields(req, res);
     if (method === 'GET' && pathname === '/comments') return handleGetComments(req, res);
     if (method === 'POST' && pathname === '/comments') return handlePostComment(req, res);
     if (method === 'POST' && pathname === '/prioritize') return handlePrioritize(req, res);

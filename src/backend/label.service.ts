@@ -93,6 +93,15 @@ async function rest(
 }
 
 /**
+ * Labels this process has already established exist, as `owner/repo#label`.
+ *
+ * A label that exists does not stop existing, so the check is worth doing once rather
+ * than once per issue. On a 17-item apply that is the difference between 34 existence
+ * probes and two.
+ */
+const known = new Set<string>();
+
+/**
  * Create the label if the repository does not have it yet.
  *
  * A 422 is treated as success, not as an error: it is what GitHub returns when the label
@@ -100,9 +109,15 @@ async function rest(
  * Losing that race is the expected outcome, not a failure.
  */
 async function ensureLabel(config: ResolvedConfig, ref: RepoRef, name: string, optionName: string): Promise<void> {
+  const memo = `${ref.owner}/${ref.repo}#${name}`;
+  if (known.has(memo)) return;
+
   const path = `/repos/${ref.owner}/${ref.repo}/labels`;
   const existing = await rest(config, 'GET', `${path}/${encodeURIComponent(name)}`);
-  if (existing.status === 200) return;
+  if (existing.status === 200) {
+    known.add(memo);
+    return;
+  }
   if (existing.status !== 404) {
     throw new GitHubError(`Could not check for the "${name}" label (${existing.status}).`, existing.status);
   }
@@ -112,40 +127,68 @@ async function ensureLabel(config: ResolvedConfig, ref: RepoRef, name: string, o
     color: COLOURS[optionName.toLowerCase()] ?? DEFAULT_COLOUR,
     description: 'Mirrors this issue’s project field. Managed by the Project Board plugin.'
   });
-  if (created.status === 201 || created.status === 422) return;
+  if (created.status === 201 || created.status === 422) {
+    known.add(memo);
+    return;
+  }
   throw new GitHubError(`Could not create the "${name}" label (${created.status}).`, created.status);
 }
 
+/** One field's new value on one issue, for `mirrorIssueLabels`. */
+export interface FieldMirror {
+  fieldName: string;
+  optionName: string | null;
+  allOptionNames: string[];
+}
+
 /**
- * Put the issue's labels in step with one field's value.
+ * Put one issue's labels in step with its fields — all of them, in one pass.
  *
- * Removals run **before** the addition, and every sibling is removed rather than only the
- * one previously set: the field may have been changed on github.com since the last mirror,
- * so "what the label used to be" is not knowable from here. Removing all siblings makes
- * the result correct from any starting state rather than only from the one we last wrote.
+ * Takes every field at once rather than one per call, because an apply sets Priority and
+ * Size on the same issue and mirroring them separately meant two `POST .../labels` calls
+ * to the same endpoint on the same issue. `POST` accepts an array and is purely additive,
+ * so combining them is strictly fewer round trips with no change in what happens.
  *
- * A 404 on a removal means the issue did not carry that label — the ordinary case, and
- * not an error.
+ * **Only what is actually present is removed.** `currentLabels` is the issue's label list
+ * from the same board snapshot that resolved the field ids — GitHub's own answer from
+ * moments earlier — so the siblings to delete are known rather than guessed. Omit it and
+ * every sibling is deleted blind, which is correct from any starting state but costs a
+ * round trip per option whatever the issue actually carries. Across a 17-item apply that
+ * blind path was most of the wall clock.
  *
- * `optionName` of `null` clears the field, so every sibling is removed and nothing added.
+ * A 404 on a removal means the issue did not carry that label — expected on the blind
+ * path, and not an error.
+ *
+ * An `optionName` of `null` clears that field: its siblings go and nothing replaces them.
+ *
+ * Deliberately **not** `PUT .../labels`, which would do the whole job — removals and
+ * additions — in a single call. `PUT` replaces the issue's entire label set, so it would
+ * silently drop any label added on github.com between our board snapshot and this write.
+ * Trading someone else's label for a few hundred milliseconds is not a trade worth making.
  */
-export async function mirrorFieldToLabels(
+export async function mirrorIssueLabels(
   config: ResolvedConfig,
   repository: string,
   issueNumber: number,
-  fieldName: string,
-  optionName: string | null,
-  allOptionNames: string[]
+  fields: FieldMirror[],
+  currentLabels?: string[]
 ): Promise<void> {
   const ref = parseRepo(repository);
   if (!ref) return;
 
-  const wanted = optionName ? labelNameFor(fieldName, optionName) : null;
-  const siblings = allOptionNames
-    .map((o) => labelNameFor(fieldName, o))
-    .filter((n) => n !== wanted);
+  const present = currentLabels ? new Set(currentLabels) : null;
+  const remove: string[] = [];
+  const add: { name: string; optionName: string }[] = [];
 
-  for (const name of siblings) {
+  for (const f of fields) {
+    const wanted = f.optionName ? labelNameFor(f.fieldName, f.optionName) : null;
+    for (const sibling of f.allOptionNames.map((o) => labelNameFor(f.fieldName, o))) {
+      if (sibling !== wanted && (!present || present.has(sibling))) remove.push(sibling);
+    }
+    if (wanted && !present?.has(wanted)) add.push({ name: wanted, optionName: f.optionName! });
+  }
+
+  for (const name of remove) {
     const res = await rest(
       config,
       'DELETE',
@@ -156,13 +199,13 @@ export async function mirrorFieldToLabels(
     }
   }
 
-  if (!wanted) return;
+  if (!add.length) return;
 
-  await ensureLabel(config, ref, wanted, optionName!);
+  for (const a of add) await ensureLabel(config, ref, a.name, a.optionName);
   const added = await rest(config, 'POST', `/repos/${ref.owner}/${ref.repo}/issues/${issueNumber}/labels`, {
-    labels: [wanted]
+    labels: add.map((a) => a.name)
   });
   if (added.status !== 200 && added.status !== 201) {
-    throw new GitHubError(`Could not add the "${wanted}" label (${added.status}).`, added.status);
+    throw new GitHubError(`Could not add ${add.map((a) => `"${a.name}"`).join(' and ')} (${added.status}).`, added.status);
   }
 }

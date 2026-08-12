@@ -29,8 +29,6 @@ interface Props {
   /** Rows the reader has ticked. */
   selected: Set<string>;
   applying: boolean;
-  /** How many of the selected rows have been written so far, for the progress line. */
-  applied: number;
   onToggle: (itemId: string) => void;
   onToggleAll: (next: boolean) => void;
   onApply: () => void;
@@ -55,7 +53,6 @@ export const SuggestionsPanel: React.FC<Props> = ({
   current,
   selected,
   applying,
-  applied,
   onToggle,
   onToggleAll,
   onApply,
@@ -146,8 +143,11 @@ export const SuggestionsPanel: React.FC<Props> = ({
 
         <div className="cpb-modal-foot">
           <span className="cpb-hint">
+            {/* No running count: the writes go in one request now, so there is no
+                per-item progress to report and inventing one would be a lie about
+                what is happening. It is seconds rather than minutes. */}
             {applying
-              ? `Applying ${applied} of ${selected.size}…`
+              ? `Applying ${selected.size} change${selected.size === 1 ? '' : 's'}…`
               : `${selected.size} selected · writes the project field and the matching label`}
           </span>
           <div className="cpb-actions">

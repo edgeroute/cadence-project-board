@@ -13029,6 +13029,41 @@ async function graphql(token, query2, variables) {
   if (!json.data) throw new GitHubError(`GitHub returned no data (${res.status}).`, res.status);
   return json.data;
 }
+async function graphqlPartial(token, query2, variables) {
+  let res;
+  try {
+    res = await fetch(GRAPHQL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/vnd.github+json"
+      },
+      body: JSON.stringify({ query: query2, variables })
+    });
+  } catch (e) {
+    throw new GitHubError(`Could not reach GitHub: ${e.message}`);
+  }
+  if (res.status === 401) throw new GitHubError("GitHub rejected the token (401). Check it in Settings.", 401);
+  const json = await res.json().catch(() => null);
+  if (!json) throw new GitHubError(`GitHub returned an unreadable response (${res.status}).`, res.status);
+  const failedAliases = /* @__PURE__ */ new Map();
+  const unattributable = [];
+  for (const error of json.errors ?? []) {
+    if (error.type === "INSUFFICIENT_SCOPES") {
+      throw new GitHubError(
+        "This token cannot read Projects. It needs a classic personal access token with both `repo` and `project` scopes \u2014 fine-grained tokens cannot access user-owned projects at all.",
+        403
+      );
+    }
+    const alias = Array.isArray(error.path) && typeof error.path[0] === "string" ? error.path[0] : null;
+    if (alias) failedAliases.set(alias, error.message);
+    else unattributable.push(error.message);
+  }
+  if (unattributable.length) throw new GitHubError(unattributable.join("; "), res.status);
+  if (!json.data && !failedAliases.size) throw new GitHubError(`GitHub returned no data (${res.status}).`, res.status);
+  return { failedAliases };
+}
 var ownerTypes = /* @__PURE__ */ new Map();
 async function resolveOwnerRoot(token, login) {
   const cached = ownerTypes.get(login);
@@ -13164,19 +13199,6 @@ async function fetchBoard(config) {
   }
   return { projectId, title, url, fields, items };
 }
-var SET_FIELD = `
-mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {
-  updateProjectV2ItemFieldValue(input:{
-    projectId:$projectId, itemId:$itemId, fieldId:$fieldId,
-    value:{ singleSelectOptionId:$optionId }
-  }) { projectV2Item { id } }
-}`;
-var CLEAR_FIELD = `
-mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!) {
-  clearProjectV2ItemFieldValue(input:{
-    projectId:$projectId, itemId:$itemId, fieldId:$fieldId
-  }) { projectV2Item { id } }
-}`;
 var COMMENTS_QUERY = `
 query($id:ID!) {
   node(id:$id) {
@@ -13227,12 +13249,49 @@ async function addComment(config, issueId, body) {
     author: node.author
   };
 }
-async function setSingleSelect(config, projectId, itemId, fieldId, optionId) {
-  if (optionId === null) {
-    await graphql(config.token, CLEAR_FIELD, { projectId, itemId, fieldId });
-    return;
+var MUTATION_CHUNK = 20;
+async function setManySingleSelect(config, projectId, writes) {
+  const failures = /* @__PURE__ */ new Map();
+  for (let start = 0; start < writes.length; start += MUTATION_CHUNK) {
+    const chunk = writes.slice(start, start + MUTATION_CHUNK);
+    const params = ["$projectId:ID!"];
+    const body = [];
+    const variables = { projectId };
+    chunk.forEach((w, i) => {
+      const n = start + i;
+      params.push(`$i${n}:ID!`, `$f${n}:ID!`);
+      variables[`i${n}`] = w.itemId;
+      variables[`f${n}`] = w.fieldId;
+      if (w.optionId === null) {
+        body.push(
+          `w${n}: clearProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$i${n}, fieldId:$f${n}}) { projectV2Item { id } }`
+        );
+      } else {
+        params.push(`$o${n}:String!`);
+        variables[`o${n}`] = w.optionId;
+        body.push(
+          `w${n}: updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$i${n}, fieldId:$f${n}, value:{singleSelectOptionId:$o${n}}}) { projectV2Item { id } }`
+        );
+      }
+    });
+    try {
+      const { failedAliases } = await graphqlPartial(
+        config.token,
+        `mutation(${params.join(", ")}) {
+${body.join("\n")}
+}`,
+        variables
+      );
+      for (const [alias, message] of failedAliases) {
+        const n = Number(alias.slice(1));
+        if (Number.isInteger(n)) failures.set(n, message);
+      }
+    } catch (e) {
+      const message = e.message;
+      chunk.forEach((_, i) => failures.set(start + i, message));
+    }
   }
-  await graphql(config.token, SET_FIELD, { projectId, itemId, fieldId, optionId });
+  return { failures };
 }
 
 // src/backend/cache.ts
@@ -13292,10 +13351,16 @@ async function rest(config, method, path7, body) {
   const json = res.status === 204 ? null : await res.json().catch(() => null);
   return { status: res.status, json };
 }
+var known = /* @__PURE__ */ new Set();
 async function ensureLabel(config, ref, name, optionName) {
+  const memo = `${ref.owner}/${ref.repo}#${name}`;
+  if (known.has(memo)) return;
   const path7 = `/repos/${ref.owner}/${ref.repo}/labels`;
   const existing = await rest(config, "GET", `${path7}/${encodeURIComponent(name)}`);
-  if (existing.status === 200) return;
+  if (existing.status === 200) {
+    known.add(memo);
+    return;
+  }
   if (existing.status !== 404) {
     throw new GitHubError(`Could not check for the "${name}" label (${existing.status}).`, existing.status);
   }
@@ -13304,15 +13369,26 @@ async function ensureLabel(config, ref, name, optionName) {
     color: COLOURS[optionName.toLowerCase()] ?? DEFAULT_COLOUR,
     description: "Mirrors this issue\u2019s project field. Managed by the Project Board plugin."
   });
-  if (created.status === 201 || created.status === 422) return;
+  if (created.status === 201 || created.status === 422) {
+    known.add(memo);
+    return;
+  }
   throw new GitHubError(`Could not create the "${name}" label (${created.status}).`, created.status);
 }
-async function mirrorFieldToLabels(config, repository, issueNumber, fieldName, optionName, allOptionNames) {
+async function mirrorIssueLabels(config, repository, issueNumber, fields, currentLabels) {
   const ref = parseRepo(repository);
   if (!ref) return;
-  const wanted = optionName ? labelNameFor(fieldName, optionName) : null;
-  const siblings = allOptionNames.map((o) => labelNameFor(fieldName, o)).filter((n) => n !== wanted);
-  for (const name of siblings) {
+  const present = currentLabels ? new Set(currentLabels) : null;
+  const remove = [];
+  const add = [];
+  for (const f of fields) {
+    const wanted = f.optionName ? labelNameFor(f.fieldName, f.optionName) : null;
+    for (const sibling of f.allOptionNames.map((o) => labelNameFor(f.fieldName, o))) {
+      if (sibling !== wanted && (!present || present.has(sibling))) remove.push(sibling);
+    }
+    if (wanted && !present?.has(wanted)) add.push({ name: wanted, optionName: f.optionName });
+  }
+  for (const name of remove) {
     const res = await rest(
       config,
       "DELETE",
@@ -13322,13 +13398,13 @@ async function mirrorFieldToLabels(config, repository, issueNumber, fieldName, o
       throw new GitHubError(`Could not remove the "${name}" label (${res.status}).`, res.status);
     }
   }
-  if (!wanted) return;
-  await ensureLabel(config, ref, wanted, optionName);
+  if (!add.length) return;
+  for (const a of add) await ensureLabel(config, ref, a.name, a.optionName);
   const added = await rest(config, "POST", `/repos/${ref.owner}/${ref.repo}/issues/${issueNumber}/labels`, {
-    labels: [wanted]
+    labels: add.map((a) => a.name)
   });
   if (added.status !== 200 && added.status !== 201) {
-    throw new GitHubError(`Could not add the "${wanted}" label (${added.status}).`, added.status);
+    throw new GitHubError(`Could not add ${add.map((a) => `"${a.name}"`).join(" and ")} (${added.status}).`, added.status);
   }
 }
 
@@ -13424,56 +13500,102 @@ async function handleGetBoard(req, res) {
   sendJson(res, 200, board);
 }
 var WRITABLE = [STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD];
+async function applyWrites(projectPath, writes) {
+  const config = await readConfig(projectPath);
+  const board = await fetchBoard(config);
+  set(projectPath, board);
+  const outcomes = [];
+  const resolved = [];
+  for (const write of writes) {
+    if (!write.itemId) return { error: "itemId is required.", status: 400 };
+    if (!write.field) return { error: "field is required.", status: 400 };
+    const fieldName = WRITABLE.find((f) => f.toLowerCase() === write.field.toLowerCase());
+    if (!fieldName) {
+      return { error: `"${write.field}" is not an editable field. Try: ${WRITABLE.join(", ")}.`, status: 400 };
+    }
+    const outcomeIndex = outcomes.length;
+    outcomes.push({ itemId: write.itemId, field: fieldName, ok: true });
+    const field = fieldByName(board.fields, fieldName);
+    if (!field) {
+      outcomes[outcomeIndex] = { itemId: write.itemId, field: fieldName, ok: false, error: `This project has no "${fieldName}" field.` };
+      continue;
+    }
+    let optionId = null;
+    if (write.option) {
+      const wanted = write.option.trim().toLowerCase();
+      const match = field.options.find((o) => o.name.toLowerCase() === wanted || o.id === write.option);
+      if (!match) {
+        const names = field.options.map((o) => o.name).join(", ");
+        outcomes[outcomeIndex] = { itemId: write.itemId, field: fieldName, ok: false, error: `"${write.option}" is not a ${fieldName}. Try: ${names}.` };
+        continue;
+      }
+      optionId = match.id;
+    }
+    resolved.push({ outcomeIndex, itemId: write.itemId, field, optionId });
+  }
+  if (!resolved.length) return { outcomes };
+  const { failures } = await setManySingleSelect(
+    config,
+    board.projectId,
+    resolved.map((r) => ({ itemId: r.itemId, fieldId: r.field.id, optionId: r.optionId }))
+  );
+  const landed = resolved.filter((r, i) => {
+    const failure = failures.get(i);
+    if (failure === void 0) return true;
+    outcomes[r.outcomeIndex] = { itemId: r.itemId, field: r.field.name, ok: false, error: failure };
+    return false;
+  });
+  invalidate(projectPath);
+  if (!landed.length) return { outcomes };
+  const byItem = /* @__PURE__ */ new Map();
+  for (const r of landed) {
+    if (r.field.name === STATUS_FIELD) continue;
+    const list = byItem.get(r.itemId);
+    if (list) list.push(r);
+    else byItem.set(r.itemId, [r]);
+  }
+  for (const [itemId, writesForItem] of byItem) {
+    const content = board.items.find((i) => i.id === itemId)?.content;
+    if (!content?.number || !content.repository) continue;
+    try {
+      await mirrorIssueLabels(
+        config,
+        content.repository,
+        content.number,
+        writesForItem.map((r) => ({
+          fieldName: r.field.name,
+          optionName: r.optionId ? r.field.options.find((o) => o.id === r.optionId)?.name ?? null : null,
+          allOptionNames: r.field.options.map((o) => o.name)
+        })),
+        // The snapshot's own label list, so only labels actually present are touched.
+        (content.labels ?? []).map((l) => l.name)
+      );
+    } catch (e) {
+      const message = `Saved, but the matching label could not be updated: ${e.message}`;
+      for (const r of writesForItem) outcomes[r.outcomeIndex].warning = message;
+    }
+  }
+  return { outcomes };
+}
 async function handleSetField(req, res) {
   const projectPath = query(req)["path"] ?? "";
   if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
   const body = JSON.parse(await readBody(req));
-  if (!body.itemId) return sendJson(res, 400, { error: "itemId is required." });
-  if (!body.field) return sendJson(res, 400, { error: "field is required." });
-  const fieldName = WRITABLE.find((f) => f.toLowerCase() === body.field.toLowerCase());
-  if (!fieldName) {
-    return sendJson(res, 400, { error: `"${body.field}" is not an editable field. Try: ${WRITABLE.join(", ")}.` });
-  }
-  const config = await readConfig(projectPath);
-  const board = await fetchBoard(config);
-  set(projectPath, board);
-  const field = fieldByName(board.fields, fieldName);
-  if (!field) {
-    return sendJson(res, 200, { error: `This project has no "${fieldName}" field.` });
-  }
-  let optionId = null;
-  if (body.option) {
-    const wanted = body.option.trim().toLowerCase();
-    const match = field.options.find((o) => o.name.toLowerCase() === wanted || o.id === body.option);
-    if (!match) {
-      const names = field.options.map((o) => o.name).join(", ");
-      return sendJson(res, 200, { error: `"${body.option}" is not a ${fieldName}. Try: ${names}.` });
-    }
-    optionId = match.id;
-  }
-  await setSingleSelect(config, board.projectId, body.itemId, field.id, optionId);
-  invalidate(projectPath);
-  let warning;
-  if (fieldName !== STATUS_FIELD) {
-    const item = board.items.find((i) => i.id === body.itemId);
-    const content = item?.content;
-    if (content?.number && content.repository) {
-      const optionName = optionId ? field.options.find((o) => o.id === optionId)?.name ?? null : null;
-      try {
-        await mirrorFieldToLabels(
-          config,
-          content.repository,
-          content.number,
-          field.name,
-          optionName,
-          field.options.map((o) => o.name)
-        );
-      } catch (e) {
-        warning = `Saved, but the matching label could not be updated: ${e.message}`;
-      }
-    }
-  }
-  sendJson(res, 200, warning ? { ok: true, warning } : { ok: true });
+  const result = await applyWrites(projectPath, [body]);
+  if ("error" in result) return sendJson(res, result.status, { error: result.error });
+  const [outcome] = result.outcomes;
+  if (!outcome.ok) return sendJson(res, 200, { error: outcome.error });
+  sendJson(res, 200, outcome.warning ? { ok: true, warning: outcome.warning } : { ok: true });
+}
+async function handleSetFields(req, res) {
+  const projectPath = query(req)["path"] ?? "";
+  if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
+  const body = JSON.parse(await readBody(req));
+  if (!Array.isArray(body.writes)) return sendJson(res, 400, { error: "writes must be an array." });
+  if (!body.writes.length) return sendJson(res, 200, { ok: true, outcomes: [] });
+  const result = await applyWrites(projectPath, body.writes);
+  if ("error" in result) return sendJson(res, result.status, { error: result.error });
+  sendJson(res, 200, { ok: true, outcomes: result.outcomes });
 }
 async function handlePrioritize(req, res) {
   const projectPath = query(req)["path"] ?? "";
@@ -13529,6 +13651,7 @@ var server = import_http.default.createServer((req, res) => {
     if (method === "POST" && pathname === "/config") return handlePostConfig(req, res);
     if (method === "GET" && pathname === "/board") return handleGetBoard(req, res);
     if (method === "POST" && pathname === "/field") return handleSetField(req, res);
+    if (method === "POST" && pathname === "/fields") return handleSetFields(req, res);
     if (method === "GET" && pathname === "/comments") return handleGetComments(req, res);
     if (method === "POST" && pathname === "/comments") return handlePostComment(req, res);
     if (method === "POST" && pathname === "/prioritize") return handlePrioritize(req, res);
