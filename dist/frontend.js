@@ -7252,50 +7252,152 @@ const ItemModal = ({ item, fields, busy, error, onSetField, onClose }) => {
     content && /* @__PURE__ */ React.createElement("a", { className: "cpb-open-link", href: content.url, target: "_blank", rel: "noreferrer noopener" }, "Open on GitHub ↗")
   ));
 };
+const PROJECT_URL = /github\.com\/(?:users|orgs)\/([^/\s]+)\/projects\/(\d+)/;
+function spliceAtCaret(el2, current, insert) {
+  const start = el2.selectionStart ?? current.length;
+  const end = el2.selectionEnd ?? current.length;
+  return current.slice(0, start) + insert + current.slice(end);
+}
 const SettingsModal = ({ initial, saving, error, onSave, onClose }) => {
   const [owner, setOwner] = React.useState(initial.owner);
   const [number, setNumber] = React.useState(initial.projectNumber ? String(initial.projectNumber) : "");
   const [token, setToken] = React.useState("");
+  const [url, setUrl] = React.useState("");
+  const [clipboardNote, setClipboardNote] = React.useState("");
   const parsed = Number(number);
   const valid = owner.trim().length > 0 && Number.isFinite(parsed) && parsed > 0;
-  const applyUrl = (value) => {
-    const m2 = /github\.com\/(users|orgs)\/([^/]+)\/projects\/(\d+)/.exec(value);
+  const applyUrl = React.useCallback((value) => {
+    const m2 = PROJECT_URL.exec(value);
     if (!m2) return false;
-    setOwner(m2[2]);
-    setNumber(m2[3]);
+    setOwner(m2[1]);
+    setNumber(m2[2]);
     return true;
-  };
-  return /* @__PURE__ */ React.createElement("div", { className: "cpb-overlay", onClick: onClose, role: "presentation" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-modal cpb-modal--narrow", onClick: (e) => e.stopPropagation(), role: "dialog", "aria-modal": "true", "aria-label": "Board settings" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-head" }, /* @__PURE__ */ React.createElement("h2", { className: "cpb-modal-title" }, "Board settings"), /* @__PURE__ */ React.createElement("button", { className: "cpb-close", onClick: onClose, "aria-label": "Close" }, "✕")), error && /* @__PURE__ */ React.createElement("div", { className: "cpb-error", role: "alert" }, error), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-url" }, "Project URL"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      id: "cpb-url",
-      className: "cpb-input",
-      placeholder: "https://github.com/users/you/projects/1",
-      onChange: (e) => applyUrl(e.target.value),
-      onPaste: (e) => {
-        if (applyUrl(e.clipboardData.getData("text"))) e.preventDefault();
+  }, []);
+  const handlePaste = React.useCallback(
+    (current, set, opts) => (e) => {
+      var _a;
+      const text = ((_a = e.clipboardData) == null ? void 0 : _a.getData("text")) ?? "";
+      if (!text) return;
+      e.preventDefault();
+      setClipboardNote("");
+      const cleaned = text.trim();
+      if ((opts == null ? void 0 : opts.detectUrl) !== false && applyUrl(cleaned)) {
+        if (opts == null ? void 0 : opts.detectUrl) setUrl(cleaned);
+        return;
       }
-    }
-  ), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Paste it and the two fields below fill themselves in."), /* @__PURE__ */ React.createElement("div", { className: "cpb-row2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-owner" }, "Owner"), /* @__PURE__ */ React.createElement("input", { id: "cpb-owner", className: "cpb-input", value: owner, onChange: (e) => setOwner(e.target.value), placeholder: "edgeroute" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-number" }, "Project #"), /* @__PURE__ */ React.createElement("input", { id: "cpb-number", className: "cpb-input", value: number, onChange: (e) => setNumber(e.target.value), placeholder: "1", inputMode: "numeric" }))), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-token" }, "GitHub token", initial.tokenSource === "config" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "saved"), initial.tokenSource === "env" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "from GH_TOKEN")), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      id: "cpb-token",
-      className: "cpb-input",
-      type: "password",
-      value: token,
-      onChange: (e) => setToken(e.target.value),
-      placeholder: initial.tokenSource === "none" ? "ghp_…" : "leave blank to keep the current one",
-      autoComplete: "off"
-    }
-  ), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Must be a ", /* @__PURE__ */ React.createElement("strong", null, "classic"), " token with ", /* @__PURE__ */ React.createElement("code", null, "repo"), " and ", /* @__PURE__ */ React.createElement("code", null, "project"), " scopes. Fine-grained tokens cannot read user-owned projects at all."), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "It is written to ", /* @__PURE__ */ React.createElement("code", null, ".CadenceBoard/project-board.json"), " in this project, and that directory is added to ", /* @__PURE__ */ React.createElement("code", null, ".gitignore"), "."), /* @__PURE__ */ React.createElement("div", { className: "cpb-actions" }, /* @__PURE__ */ React.createElement("button", { className: "cpb-btn", onClick: onClose, disabled: saving }, "Cancel"), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      className: "cpb-btn cpb-btn--primary",
-      disabled: !valid || saving,
-      onClick: () => onSave({ owner: owner.trim(), projectNumber: parsed, token: token.trim() || void 0 })
+      const insert = (opts == null ? void 0 : opts.digitsOnly) ? cleaned.replace(/\D/g, "") : cleaned;
+      if (!insert) return;
+      set(spliceAtCaret(e.currentTarget, current, insert));
     },
-    saving ? "Saving…" : "Save"
-  ))));
+    [applyUrl]
+  );
+  const pasteFromClipboard = React.useCallback(
+    async (set, opts) => {
+      setClipboardNote("");
+      try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) {
+          setClipboardNote("The clipboard is empty.");
+          return;
+        }
+        if ((opts == null ? void 0 : opts.detectUrl) !== false && applyUrl(text)) {
+          if (opts == null ? void 0 : opts.detectUrl) setUrl(text);
+          return;
+        }
+        set((opts == null ? void 0 : opts.digitsOnly) ? text.replace(/\D/g, "") : text);
+      } catch {
+        setClipboardNote("This window will not let the plugin read the clipboard. Use ⌘/Ctrl+V in the field, or type it.");
+      }
+    },
+    [applyUrl]
+  );
+  return /* @__PURE__ */ React.createElement("div", { className: "cpb-overlay", onClick: onClose, role: "presentation" }, /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "cpb-modal cpb-modal--narrow",
+      onClick: (e) => e.stopPropagation(),
+      onPasteCapture: (e) => {
+        var _a, _b;
+        const text = ((_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text")) == null ? void 0 : _b.trim()) ?? "";
+        if (text && PROJECT_URL.test(text) && !(e.target instanceof HTMLInputElement)) {
+          e.preventDefault();
+          setUrl(text);
+          applyUrl(text);
+        }
+      },
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Board settings"
+    },
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-head" }, /* @__PURE__ */ React.createElement("h2", { className: "cpb-modal-title" }, "Board settings"), /* @__PURE__ */ React.createElement("button", { className: "cpb-close", onClick: onClose, "aria-label": "Close" }, "✕")),
+    error && /* @__PURE__ */ React.createElement("div", { className: "cpb-error", role: "alert" }, error),
+    clipboardNote && /* @__PURE__ */ React.createElement("div", { className: "cpb-error", role: "alert" }, clipboardNote),
+    /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-url" }, "Project URL"),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-input-row" }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "cpb-url",
+        className: "cpb-input",
+        value: url,
+        placeholder: "https://github.com/users/you/projects/1",
+        onChange: (e) => {
+          setUrl(e.target.value);
+          applyUrl(e.target.value);
+        },
+        onPasteCapture: handlePaste(url, setUrl, { detectUrl: true }),
+        autoFocus: true
+      }
+    ), /* @__PURE__ */ React.createElement("button", { className: "cpb-btn cpb-paste", onClick: () => void pasteFromClipboard(setUrl, { detectUrl: true }), title: "Paste from clipboard" }, "Paste")),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Paste it and the two fields below fill themselves in."),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-row2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-owner" }, "Owner"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "cpb-owner",
+        className: "cpb-input",
+        value: owner,
+        onChange: (e) => setOwner(e.target.value),
+        onPasteCapture: handlePaste(owner, setOwner),
+        placeholder: "edgeroute"
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-number" }, "Project #"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "cpb-number",
+        className: "cpb-input",
+        value: number,
+        onChange: (e) => setNumber(e.target.value),
+        onPasteCapture: handlePaste(number, setNumber, { digitsOnly: true }),
+        placeholder: "1",
+        inputMode: "numeric"
+      }
+    ))),
+    /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-token" }, "GitHub token", initial.tokenSource === "config" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "saved"), initial.tokenSource === "env" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "from GH_TOKEN")),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-input-row" }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "cpb-token",
+        className: "cpb-input",
+        type: "password",
+        value: token,
+        onChange: (e) => setToken(e.target.value),
+        onPasteCapture: handlePaste(token, setToken, { detectUrl: false }),
+        placeholder: initial.tokenSource === "none" ? "ghp_…" : "leave blank to keep the current one",
+        autoComplete: "off",
+        spellCheck: false
+      }
+    ), /* @__PURE__ */ React.createElement("button", { className: "cpb-btn cpb-paste", onClick: () => void pasteFromClipboard(setToken, { detectUrl: false }), title: "Paste from clipboard" }, "Paste")),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Must be a ", /* @__PURE__ */ React.createElement("strong", null, "classic"), " token with ", /* @__PURE__ */ React.createElement("code", null, "repo"), " and ", /* @__PURE__ */ React.createElement("code", null, "project"), " scopes. Fine-grained tokens cannot read user-owned projects at all."),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "It is written to ", /* @__PURE__ */ React.createElement("code", null, ".CadenceBoard/project-board.json"), " in this project, and that directory is added to ", /* @__PURE__ */ React.createElement("code", null, ".gitignore"), "."),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-actions" }, /* @__PURE__ */ React.createElement("button", { className: "cpb-btn", onClick: onClose, disabled: saving }, "Cancel"), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        className: "cpb-btn cpb-btn--primary",
+        disabled: !valid || saving,
+        onClick: () => onSave({ owner: owner.trim(), projectNumber: parsed, token: token.trim() || void 0 })
+      },
+      saving ? "Saving…" : "Save"
+    ))
+  ));
 };
 const App = () => {
   const api = usePluginAPI();
@@ -7510,7 +7612,7 @@ const App = () => {
     }
   ));
 };
-const stylesRaw = '/*\n * Every selector is prefixed `cpb-`.\n *\n * These rules are injected into the host document\'s <head>, not into a shadow root,\n * so an unprefixed `.card` or a bare element selector would restyle claudecodeui\n * itself. There is exactly one element selector in this file and it is scoped under\n * .cpb-root.\n *\n * Colours are CSS custom properties defined on .cpb-root for each theme, so the whole\n * board follows api.context.theme by swapping one class rather than by threading a\n * theme prop through every component.\n */\n\n.cpb-root {\n  --cpb-bg: #ffffff;\n  --cpb-panel: #f6f7f9;\n  --cpb-panel-2: #eceef2;\n  --cpb-card: #ffffff;\n  --cpb-line: rgba(0, 0, 0, 0.12);\n  --cpb-text: #16181d;\n  --cpb-dim: #5c6370;\n  --cpb-accent: #2563eb;\n  --cpb-accent-soft: rgba(37, 99, 235, 0.1);\n  --cpb-danger: #b3261e;\n  --cpb-danger-bg: rgba(179, 38, 30, 0.1);\n\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  background: var(--cpb-bg);\n  color: var(--cpb-text);\n  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;\n  font-size: 13px;\n}\n\n.cpb-root--dark {\n  --cpb-bg: #16181d;\n  --cpb-panel: #1e2128;\n  --cpb-panel-2: #262a33;\n  --cpb-card: #232730;\n  --cpb-line: rgba(255, 255, 255, 0.12);\n  --cpb-text: #e7e9ee;\n  --cpb-dim: #9aa1ae;\n  --cpb-accent: #7aa2f7;\n  --cpb-accent-soft: rgba(122, 162, 247, 0.16);\n  --cpb-danger: #f08a7a;\n  --cpb-danger-bg: rgba(240, 138, 122, 0.14);\n}\n\n/* ---------- toolbar ---------- */\n\n.cpb-bar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--cpb-line);\n  flex-wrap: wrap;\n}\n\n.cpb-bar-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }\n.cpb-bar-right { display: flex; align-items: center; gap: 6px; }\n\n.cpb-h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }\n.cpb-count { color: var(--cpb-dim); font-size: 12px; white-space: nowrap; }\n\n.cpb-search {\n  width: 200px;\n  padding: 6px 10px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n}\n.cpb-search:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n\n.cpb-btn {\n  /* 32px, not 44: this is a desktop web UI inside a host whose own controls are this\n     size, and a board of 44pt buttons would read as a different application. The\n     touch-target argument that governs the Cadence phone app does not transfer. */\n  min-height: 32px;\n  padding: 0 12px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  text-decoration: none;\n  white-space: nowrap;\n}\n.cpb-btn:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-btn:disabled { opacity: 0.5; cursor: default; }\n.cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }\n\n/* ---------- errors ---------- */\n\n.cpb-error {\n  background: var(--cpb-danger-bg);\n  color: var(--cpb-danger);\n  border-radius: 7px;\n  padding: 8px 10px;\n  font-size: 12px;\n  line-height: 1.45;\n}\n.cpb-error--bar {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  margin: 8px 14px 0;\n  border-radius: 7px;\n}\n.cpb-error--bar span { flex: 1; }\n.cpb-error-dismiss {\n  background: none;\n  border: none;\n  color: inherit;\n  cursor: pointer;\n  font-size: 12px;\n  padding: 0 2px;\n}\n\n/* ---------- setup / empty ---------- */\n\n.cpb-setup { padding: 40px 20px; text-align: center; color: var(--cpb-dim); }\n.cpb-setup-title { margin: 0 0 6px; font-size: 15px; color: var(--cpb-text); }\n.cpb-setup-body { margin: 0 0 14px; font-size: 13px; max-width: 460px; margin-inline: auto; line-height: 1.5; }\n\n/* ---------- board ---------- */\n\n.cpb-board-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 14px 14px; }\n\n.cpb-board {\n  flex: 1;\n  min-height: 0;\n  display: grid;\n  gap: 10px;\n  align-items: start;\n  overflow-x: auto;\n  /* Columns scroll their own bodies, so the grid must be exactly as tall as the wrap\n     or every column grows to the tallest and the page scrolls instead. */\n  height: 100%;\n}\n\n.cpb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }\n.cpb-chip {\n  display: inline-flex; align-items: center; gap: 6px;\n  padding: 4px 10px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-dim); font-size: 11px; font-family: inherit; cursor: pointer;\n}\n.cpb-chip-count { color: var(--cpb-text); font-weight: 700; }\n\n.cpb-column {\n  display: flex;\n  flex-direction: column;\n  min-height: 0;\n  height: 100%;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 10px;\n  overflow: hidden;\n  transition: box-shadow 0.12s ease, background 0.12s ease;\n}\n.cpb-column--over {\n  box-shadow: inset 0 0 0 2px var(--cpb-accent);\n  background: var(--cpb-accent-soft);\n}\n\n.cpb-column-head {\n  display: flex; align-items: center; gap: 8px;\n  width: 100%;\n  padding: 9px 11px;\n  background: none; border: none; border-bottom: 1px solid var(--cpb-line);\n  color: var(--cpb-text); font-family: inherit; font-size: 12px; font-weight: 650;\n  cursor: pointer; text-align: left;\n}\n.cpb-column-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n.cpb-column-count {\n  color: var(--cpb-dim); font-weight: 700; font-size: 11px;\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 7px;\n}\n.cpb-column-chev { color: var(--cpb-dim); font-size: 10px; }\n\n.cpb-column-body {\n  flex: 1; min-height: 0;\n  overflow-y: auto;\n  padding: 8px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n\n.cpb-column--collapsed .cpb-column-head { justify-content: center; }\n.cpb-column-collapsed {\n  flex: 1; background: none; border: none; cursor: pointer;\n  color: var(--cpb-dim); font-family: inherit; font-size: 11px;\n  display: flex; align-items: center; justify-content: center; padding: 8px 0;\n}\n.cpb-column-collapsed-label { writing-mode: vertical-rl; white-space: nowrap; }\n\n.cpb-column-empty {\n  border: 1px dashed var(--cpb-line);\n  border-radius: 8px;\n  padding: 16px 8px;\n  text-align: center;\n  color: var(--cpb-dim);\n  font-size: 11px;\n}\n.cpb-column-empty--over { border-color: var(--cpb-accent); color: var(--cpb-accent); }\n\n/* ---------- card ---------- */\n\n.cpb-card {\n  background: var(--cpb-card);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 9px 10px;\n  cursor: grab;\n  display: flex; flex-direction: column; gap: 6px;\n  /* The drag image is a snapshot of this element; a transform or filter here shows up\n     in it, so the pressed state is opacity only. */\n}\n.cpb-card:hover { border-color: var(--cpb-accent); }\n.cpb-card:focus-visible { outline: 2px solid var(--cpb-accent); outline-offset: 1px; }\n.cpb-card--dragging { opacity: 0.45; cursor: grabbing; }\n.cpb-card--busy { cursor: default; opacity: 0.75; }\n\n.cpb-card-top { display: flex; align-items: center; gap: 6px; }\n.cpb-card-number { color: var(--cpb-dim); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }\n.cpb-card-draft {\n  color: var(--cpb-dim); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;\n  border: 1px solid var(--cpb-line); border-radius: 3px; padding: 0 4px;\n}\n.cpb-card-priority {\n  margin-left: auto;\n  font-size: 10px; font-weight: 700;\n  border: 1px solid; border-radius: 999px; padding: 0 6px;\n}\n.cpb-card-size {\n  font-size: 10px; font-weight: 700; color: var(--cpb-dim);\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 6px;\n}\n/* `.cpb-card-priority` claims the auto margin when present; without it Size must. */\n.cpb-card-top > .cpb-card-size:nth-child(2) { margin-left: auto; }\n\n.cpb-card-spinner {\n  width: 10px; height: 10px; border-radius: 50%;\n  border: 2px solid var(--cpb-line); border-top-color: var(--cpb-accent);\n  animation: cpb-spin 0.7s linear infinite;\n}\n@keyframes cpb-spin { to { transform: rotate(360deg); } }\n/* A permanent spinner is worse than none for anyone who has asked the OS to stop\n   moving things; the ring stays as a static state marker. */\n@media (prefers-reduced-motion: reduce) {\n  .cpb-card-spinner { animation: none; border-top-color: var(--cpb-accent); }\n}\n\n.cpb-card-title { font-size: 12.5px; line-height: 1.4; }\n\n.cpb-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }\n.cpb-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }\n.cpb-card-label {\n  font-size: 9.5px; font-weight: 600; border-radius: 999px; padding: 1px 6px;\n  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.cpb-card-avatars { display: flex; gap: 2px; flex-shrink: 0; }\n.cpb-card-avatar { width: 16px; height: 16px; border-radius: 50%; }\n\n/* ---------- modal ---------- */\n\n.cpb-overlay {\n  position: fixed; inset: 0; z-index: 40;\n  background: rgba(0, 0, 0, 0.45);\n  display: flex; align-items: center; justify-content: center;\n  padding: 24px;\n}\n.cpb-modal {\n  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;\n  background: var(--cpb-bg); color: var(--cpb-text);\n  border: 1px solid var(--cpb-line); border-radius: 12px;\n  padding: 16px 18px 18px;\n  display: flex; flex-direction: column; gap: 12px;\n}\n.cpb-modal--narrow { max-width: 440px; }\n\n.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }\n.cpb-modal-titles { flex: 1; min-width: 0; }\n.cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }\n.cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }\n.cpb-close {\n  background: var(--cpb-panel); border: 1px solid var(--cpb-line); border-radius: 7px;\n  width: 28px; height: 28px; color: var(--cpb-dim); cursor: pointer; flex-shrink: 0;\n  font-size: 12px; line-height: 1;\n}\n.cpb-close:hover { background: var(--cpb-panel-2); }\n\n.cpb-fields { display: flex; flex-direction: column; gap: 10px; }\n.cpb-field { display: flex; flex-direction: column; gap: 5px; }\n.cpb-field-name { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cpb-dim); }\n.cpb-field-options { display: flex; flex-wrap: wrap; gap: 5px; }\n.cpb-opt {\n  padding: 5px 11px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 11.5px; font-family: inherit; cursor: pointer;\n}\n.cpb-opt:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-opt:disabled { opacity: 0.5; cursor: default; }\n.cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-opt--clear { color: var(--cpb-dim); }\n\n.cpb-body {\n  margin: 0;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 10px 12px;\n  font-size: 11.5px; line-height: 1.55;\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  white-space: pre-wrap; word-break: break-word;\n  max-height: 260px; overflow-y: auto;\n}\n\n.cpb-open-link { color: var(--cpb-accent); font-size: 12px; text-decoration: none; align-self: flex-start; }\n.cpb-open-link:hover { text-decoration: underline; }\n\n/* ---------- settings form ---------- */\n\n.cpb-label {\n  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;\n  color: var(--cpb-dim); display: flex; align-items: center; gap: 6px;\n}\n.cpb-input {\n  width: 100%; padding: 7px 10px; border-radius: 7px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; font-family: inherit;\n  box-sizing: border-box;\n}\n.cpb-input:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-hint { color: var(--cpb-dim); font-size: 11px; line-height: 1.5; }\n.cpb-hint code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;\n}\n.cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }\n.cpb-tag {\n  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;\n  background: var(--cpb-accent-soft); color: var(--cpb-accent);\n  border-radius: 999px; padding: 1px 6px; text-transform: none;\n}\n.cpb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }\n\n@media (max-width: 640px) {\n  .cpb-search { width: 130px; }\n  .cpb-bar { gap: 8px; }\n}\n';
+const stylesRaw = "/*\n * Every selector is prefixed `cpb-`.\n *\n * These rules are injected into the host document's <head>, not into a shadow root,\n * so an unprefixed `.card` or a bare element selector would restyle claudecodeui\n * itself. There is exactly one element selector in this file and it is scoped under\n * .cpb-root.\n *\n * Colours are CSS custom properties defined on .cpb-root for each theme, so the whole\n * board follows api.context.theme by swapping one class rather than by threading a\n * theme prop through every component.\n */\n\n.cpb-root {\n  --cpb-bg: #ffffff;\n  --cpb-panel: #f6f7f9;\n  --cpb-panel-2: #eceef2;\n  --cpb-card: #ffffff;\n  --cpb-line: rgba(0, 0, 0, 0.12);\n  --cpb-text: #16181d;\n  --cpb-dim: #5c6370;\n  --cpb-accent: #2563eb;\n  --cpb-accent-soft: rgba(37, 99, 235, 0.1);\n  --cpb-danger: #b3261e;\n  --cpb-danger-bg: rgba(179, 38, 30, 0.1);\n\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  background: var(--cpb-bg);\n  color: var(--cpb-text);\n  font-family: ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif;\n  font-size: 13px;\n}\n\n.cpb-root--dark {\n  --cpb-bg: #16181d;\n  --cpb-panel: #1e2128;\n  --cpb-panel-2: #262a33;\n  --cpb-card: #232730;\n  --cpb-line: rgba(255, 255, 255, 0.12);\n  --cpb-text: #e7e9ee;\n  --cpb-dim: #9aa1ae;\n  --cpb-accent: #7aa2f7;\n  --cpb-accent-soft: rgba(122, 162, 247, 0.16);\n  --cpb-danger: #f08a7a;\n  --cpb-danger-bg: rgba(240, 138, 122, 0.14);\n}\n\n/* ---------- toolbar ---------- */\n\n.cpb-bar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--cpb-line);\n  flex-wrap: wrap;\n}\n\n.cpb-bar-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }\n.cpb-bar-right { display: flex; align-items: center; gap: 6px; }\n\n.cpb-h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }\n.cpb-count { color: var(--cpb-dim); font-size: 12px; white-space: nowrap; }\n\n.cpb-search {\n  width: 200px;\n  padding: 6px 10px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n}\n.cpb-search:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n\n.cpb-btn {\n  /* 32px, not 44: this is a desktop web UI inside a host whose own controls are this\n     size, and a board of 44pt buttons would read as a different application. The\n     touch-target argument that governs the Cadence phone app does not transfer. */\n  min-height: 32px;\n  padding: 0 12px;\n  border-radius: 7px;\n  border: 1px solid var(--cpb-line);\n  background: var(--cpb-panel);\n  color: var(--cpb-text);\n  font-size: 12px;\n  font-family: inherit;\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  text-decoration: none;\n  white-space: nowrap;\n}\n.cpb-btn:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-btn:disabled { opacity: 0.5; cursor: default; }\n.cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }\n\n/* ---------- errors ---------- */\n\n.cpb-error {\n  background: var(--cpb-danger-bg);\n  color: var(--cpb-danger);\n  border-radius: 7px;\n  padding: 8px 10px;\n  font-size: 12px;\n  line-height: 1.45;\n}\n.cpb-error--bar {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  margin: 8px 14px 0;\n  border-radius: 7px;\n}\n.cpb-error--bar span { flex: 1; }\n.cpb-error-dismiss {\n  background: none;\n  border: none;\n  color: inherit;\n  cursor: pointer;\n  font-size: 12px;\n  padding: 0 2px;\n}\n\n/* ---------- setup / empty ---------- */\n\n.cpb-setup { padding: 40px 20px; text-align: center; color: var(--cpb-dim); }\n.cpb-setup-title { margin: 0 0 6px; font-size: 15px; color: var(--cpb-text); }\n.cpb-setup-body { margin: 0 0 14px; font-size: 13px; max-width: 460px; margin-inline: auto; line-height: 1.5; }\n\n/* ---------- board ---------- */\n\n.cpb-board-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 14px 14px; }\n\n.cpb-board {\n  flex: 1;\n  min-height: 0;\n  display: grid;\n  gap: 10px;\n  align-items: start;\n  overflow-x: auto;\n  /* Columns scroll their own bodies, so the grid must be exactly as tall as the wrap\n     or every column grows to the tallest and the page scrolls instead. */\n  height: 100%;\n}\n\n.cpb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }\n.cpb-chip {\n  display: inline-flex; align-items: center; gap: 6px;\n  padding: 4px 10px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-dim); font-size: 11px; font-family: inherit; cursor: pointer;\n}\n.cpb-chip-count { color: var(--cpb-text); font-weight: 700; }\n\n.cpb-column {\n  display: flex;\n  flex-direction: column;\n  min-height: 0;\n  height: 100%;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 10px;\n  overflow: hidden;\n  transition: box-shadow 0.12s ease, background 0.12s ease;\n}\n.cpb-column--over {\n  box-shadow: inset 0 0 0 2px var(--cpb-accent);\n  background: var(--cpb-accent-soft);\n}\n\n.cpb-column-head {\n  display: flex; align-items: center; gap: 8px;\n  width: 100%;\n  padding: 9px 11px;\n  background: none; border: none; border-bottom: 1px solid var(--cpb-line);\n  color: var(--cpb-text); font-family: inherit; font-size: 12px; font-weight: 650;\n  cursor: pointer; text-align: left;\n}\n.cpb-column-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n.cpb-column-count {\n  color: var(--cpb-dim); font-weight: 700; font-size: 11px;\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 7px;\n}\n.cpb-column-chev { color: var(--cpb-dim); font-size: 10px; }\n\n.cpb-column-body {\n  flex: 1; min-height: 0;\n  overflow-y: auto;\n  padding: 8px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n\n.cpb-column--collapsed .cpb-column-head { justify-content: center; }\n.cpb-column-collapsed {\n  flex: 1; background: none; border: none; cursor: pointer;\n  color: var(--cpb-dim); font-family: inherit; font-size: 11px;\n  display: flex; align-items: center; justify-content: center; padding: 8px 0;\n}\n.cpb-column-collapsed-label { writing-mode: vertical-rl; white-space: nowrap; }\n\n.cpb-column-empty {\n  border: 1px dashed var(--cpb-line);\n  border-radius: 8px;\n  padding: 16px 8px;\n  text-align: center;\n  color: var(--cpb-dim);\n  font-size: 11px;\n}\n.cpb-column-empty--over { border-color: var(--cpb-accent); color: var(--cpb-accent); }\n\n/* ---------- card ---------- */\n\n.cpb-card {\n  background: var(--cpb-card);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 9px 10px;\n  cursor: grab;\n  display: flex; flex-direction: column; gap: 6px;\n  /* The drag image is a snapshot of this element; a transform or filter here shows up\n     in it, so the pressed state is opacity only. */\n}\n.cpb-card:hover { border-color: var(--cpb-accent); }\n.cpb-card:focus-visible { outline: 2px solid var(--cpb-accent); outline-offset: 1px; }\n.cpb-card--dragging { opacity: 0.45; cursor: grabbing; }\n.cpb-card--busy { cursor: default; opacity: 0.75; }\n\n.cpb-card-top { display: flex; align-items: center; gap: 6px; }\n.cpb-card-number { color: var(--cpb-dim); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }\n.cpb-card-draft {\n  color: var(--cpb-dim); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;\n  border: 1px solid var(--cpb-line); border-radius: 3px; padding: 0 4px;\n}\n.cpb-card-priority {\n  margin-left: auto;\n  font-size: 10px; font-weight: 700;\n  border: 1px solid; border-radius: 999px; padding: 0 6px;\n}\n.cpb-card-size {\n  font-size: 10px; font-weight: 700; color: var(--cpb-dim);\n  background: var(--cpb-panel-2); border-radius: 999px; padding: 1px 6px;\n}\n/* `.cpb-card-priority` claims the auto margin when present; without it Size must. */\n.cpb-card-top > .cpb-card-size:nth-child(2) { margin-left: auto; }\n\n.cpb-card-spinner {\n  width: 10px; height: 10px; border-radius: 50%;\n  border: 2px solid var(--cpb-line); border-top-color: var(--cpb-accent);\n  animation: cpb-spin 0.7s linear infinite;\n}\n@keyframes cpb-spin { to { transform: rotate(360deg); } }\n/* A permanent spinner is worse than none for anyone who has asked the OS to stop\n   moving things; the ring stays as a static state marker. */\n@media (prefers-reduced-motion: reduce) {\n  .cpb-card-spinner { animation: none; border-top-color: var(--cpb-accent); }\n}\n\n.cpb-card-title { font-size: 12.5px; line-height: 1.4; }\n\n.cpb-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }\n.cpb-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }\n.cpb-card-label {\n  font-size: 9.5px; font-weight: 600; border-radius: 999px; padding: 1px 6px;\n  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.cpb-card-avatars { display: flex; gap: 2px; flex-shrink: 0; }\n.cpb-card-avatar { width: 16px; height: 16px; border-radius: 50%; }\n\n/* ---------- modal ---------- */\n\n.cpb-overlay {\n  position: fixed; inset: 0; z-index: 40;\n  background: rgba(0, 0, 0, 0.45);\n  display: flex; align-items: center; justify-content: center;\n  padding: 24px;\n}\n.cpb-modal {\n  width: 100%; max-width: 620px; max-height: 86vh; overflow-y: auto;\n  background: var(--cpb-bg); color: var(--cpb-text);\n  border: 1px solid var(--cpb-line); border-radius: 12px;\n  padding: 16px 18px 18px;\n  display: flex; flex-direction: column; gap: 12px;\n}\n.cpb-modal--narrow { max-width: 440px; }\n\n.cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }\n.cpb-modal-titles { flex: 1; min-width: 0; }\n.cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }\n.cpb-modal-sub { margin-top: 3px; color: var(--cpb-dim); font-size: 11.5px; }\n.cpb-close {\n  background: var(--cpb-panel); border: 1px solid var(--cpb-line); border-radius: 7px;\n  width: 28px; height: 28px; color: var(--cpb-dim); cursor: pointer; flex-shrink: 0;\n  font-size: 12px; line-height: 1;\n}\n.cpb-close:hover { background: var(--cpb-panel-2); }\n\n.cpb-fields { display: flex; flex-direction: column; gap: 10px; }\n.cpb-field { display: flex; flex-direction: column; gap: 5px; }\n.cpb-field-name { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cpb-dim); }\n.cpb-field-options { display: flex; flex-wrap: wrap; gap: 5px; }\n.cpb-opt {\n  padding: 5px 11px; border-radius: 999px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 11.5px; font-family: inherit; cursor: pointer;\n}\n.cpb-opt:hover:not(:disabled) { background: var(--cpb-panel-2); }\n.cpb-opt:disabled { opacity: 0.5; cursor: default; }\n.cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }\n.cpb-opt--clear { color: var(--cpb-dim); }\n\n.cpb-body {\n  margin: 0;\n  background: var(--cpb-panel);\n  border: 1px solid var(--cpb-line);\n  border-radius: 8px;\n  padding: 10px 12px;\n  font-size: 11.5px; line-height: 1.55;\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  white-space: pre-wrap; word-break: break-word;\n  max-height: 260px; overflow-y: auto;\n}\n\n.cpb-open-link { color: var(--cpb-accent); font-size: 12px; text-decoration: none; align-self: flex-start; }\n.cpb-open-link:hover { text-decoration: underline; }\n\n/* ---------- settings form ---------- */\n\n.cpb-label {\n  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;\n  color: var(--cpb-dim); display: flex; align-items: center; gap: 6px;\n}\n.cpb-input {\n  width: 100%; padding: 7px 10px; border-radius: 7px;\n  border: 1px solid var(--cpb-line); background: var(--cpb-panel);\n  color: var(--cpb-text); font-size: 12.5px; font-family: inherit;\n  box-sizing: border-box;\n}\n.cpb-input:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }\n.cpb-hint { color: var(--cpb-dim); font-size: 11px; line-height: 1.5; }\n.cpb-hint code {\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;\n}\n/* A field with its own Paste button beside it — the escape hatch for a host that\n   swallows the paste event. `align-items: stretch` so the button matches the input's\n   height rather than the 32px it would otherwise keep. */\n.cpb-input-row { display: flex; gap: 6px; align-items: stretch; }\n.cpb-input-row .cpb-input { flex: 1; min-width: 0; }\n.cpb-paste { flex-shrink: 0; }\n\n.cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }\n.cpb-tag {\n  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;\n  background: var(--cpb-accent-soft); color: var(--cpb-accent);\n  border-radius: 999px; padding: 1px 6px; text-transform: none;\n}\n.cpb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }\n\n@media (max-width: 640px) {\n  .cpb-search { width: 130px; }\n  .cpb-bar { gap: 8px; }\n}\n";
 const STYLE_ID = "cpb-plugin-styles";
 if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
   const el2 = document.createElement("style");

@@ -8,60 +8,193 @@ interface Props {
   onClose: () => void;
 }
 
+/** `https://github.com/users/edgeroute/projects/1` → owner and number. */
+const PROJECT_URL = /github\.com\/(?:users|orgs)\/([^/\s]+)\/projects\/(\d+)/;
+
+/**
+ * Insert text at the caret, the way the browser would have.
+ *
+ * Needed because this form does its own pasting — see `handlePaste`. Splicing at the
+ * selection rather than replacing the whole value is what keeps paste behaving like
+ * paste when the field already has something in it and the caret is mid-string.
+ */
+function spliceAtCaret(el: HTMLInputElement, current: string, insert: string): string {
+  const start = el.selectionStart ?? current.length;
+  const end = el.selectionEnd ?? current.length;
+  return current.slice(0, start) + insert + current.slice(end);
+}
+
 export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave, onClose }) => {
   const [owner, setOwner] = React.useState(initial.owner);
   const [number, setNumber] = React.useState(initial.projectNumber ? String(initial.projectNumber) : '');
   const [token, setToken] = React.useState('');
+  const [url, setUrl] = React.useState('');
+  const [clipboardNote, setClipboardNote] = React.useState('');
 
   const parsed = Number(number);
   const valid = owner.trim().length > 0 && Number.isFinite(parsed) && parsed > 0;
 
-  /**
-   * Paste the project URL, get the fields filled in.
-   *
-   * The owner and the number are both in the URL the reader already has open, and
-   * "project number" is not a thing anyone knows off-hand — it is neither the project
-   * id nor its title. Accepting the URL is the difference between a form you can fill
-   * from memory and one you have to go and look something up for.
-   */
-  const applyUrl = (value: string) => {
-    const m = /github\.com\/(users|orgs)\/([^/]+)\/projects\/(\d+)/.exec(value);
+  /** Fill owner and number from anything that looks like a project URL. */
+  const applyUrl = React.useCallback((value: string): boolean => {
+    const m = PROJECT_URL.exec(value);
     if (!m) return false;
-    setOwner(m[2]);
-    setNumber(m[3]);
+    setOwner(m[1]);
+    setNumber(m[2]);
     return true;
-  };
+  }, []);
+
+  /**
+   * Paste, implemented here rather than left to the browser.
+   *
+   * Reported from a real install: the fields could be typed into but not pasted into.
+   * Two causes, and this handles both.
+   *
+   * The first was mine — the URL field called `preventDefault()` whenever the pasted
+   * text parsed, so a *successful* paste was the one that left the box looking empty.
+   *
+   * The second is not mine to fix directly: claudecodeui is a full application with
+   * its own document-level key and clipboard handling, and a host that cancels the
+   * paste event (a "paste an image into the chat" feature is the usual culprit) leaves
+   * a controlled input's `onChange` never firing at all. Nothing about the input can
+   * change that.
+   *
+   * So the value is taken straight off `clipboardData` and written to state, and the
+   * default action is cancelled deliberately — the insertion has already happened by
+   * then. Whether the host would have cancelled it too stops mattering, because this
+   * no longer depends on the default action running.
+   *
+   * Registered on the **capture** phase (`onPasteCapture` at the call sites) so a host
+   * listener that stops propagation on the way up cannot get there first.
+   */
+  const handlePaste = React.useCallback(
+    (current: string, set: (v: string) => void, opts?: { detectUrl?: boolean; digitsOnly?: boolean }) =>
+      (e: React.ClipboardEvent<HTMLInputElement>) => {
+        const text = e.clipboardData?.getData('text') ?? '';
+        // Nothing on the clipboard we can use: let the default run rather than
+        // cancelling a paste we are not replacing.
+        if (!text) return;
+        e.preventDefault();
+        setClipboardNote('');
+
+        const cleaned = text.trim();
+        // A project URL fills both fields wherever it is pasted — including into the
+        // token box, which is where it lands when someone pastes on autopilot.
+        if (opts?.detectUrl !== false && applyUrl(cleaned)) {
+          if (opts?.detectUrl) setUrl(cleaned);
+          return;
+        }
+
+        const insert = opts?.digitsOnly ? cleaned.replace(/\D/g, '') : cleaned;
+        if (!insert) return;
+        set(spliceAtCaret(e.currentTarget, current, insert));
+      },
+    [applyUrl]
+  );
+
+  /**
+   * The escape hatch, for a host that suppresses the paste event outright.
+   *
+   * If the event never fires, `handlePaste` never runs and there is nothing an input
+   * can do about it. Reading the clipboard directly goes around the event entirely.
+   * It needs a user gesture and can still be refused — in a cross-origin frame, or
+   * where the reader declines the permission prompt — so the failure says so instead
+   * of leaving a button that does nothing.
+   */
+  const pasteFromClipboard = React.useCallback(
+    async (set: (v: string) => void, opts?: { detectUrl?: boolean; digitsOnly?: boolean }) => {
+      setClipboardNote('');
+      try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) {
+          setClipboardNote('The clipboard is empty.');
+          return;
+        }
+        if (opts?.detectUrl !== false && applyUrl(text)) {
+          if (opts?.detectUrl) setUrl(text);
+          return;
+        }
+        set(opts?.digitsOnly ? text.replace(/\D/g, '') : text);
+      } catch {
+        setClipboardNote('This window will not let the plugin read the clipboard. Use ⌘/Ctrl+V in the field, or type it.');
+      }
+    },
+    [applyUrl]
+  );
 
   return (
     <div className="cpb-overlay" onClick={onClose} role="presentation">
-      <div className="cpb-modal cpb-modal--narrow" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Board settings">
+      <div
+        className="cpb-modal cpb-modal--narrow"
+        onClick={(e) => e.stopPropagation()}
+        // A project URL pasted anywhere in this dialog fills the fields, even with
+        // nothing focused. Capture phase, same reasoning as the fields themselves.
+        onPasteCapture={(e) => {
+          const text = e.clipboardData?.getData('text')?.trim() ?? '';
+          if (text && PROJECT_URL.test(text) && !(e.target instanceof HTMLInputElement)) {
+            e.preventDefault();
+            setUrl(text);
+            applyUrl(text);
+          }
+        }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Board settings"
+      >
         <div className="cpb-modal-head">
           <h2 className="cpb-modal-title">Board settings</h2>
           <button className="cpb-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
         {error && <div className="cpb-error" role="alert">{error}</div>}
+        {clipboardNote && <div className="cpb-error" role="alert">{clipboardNote}</div>}
 
         <label className="cpb-label" htmlFor="cpb-url">Project URL</label>
-        <input
-          id="cpb-url"
-          className="cpb-input"
-          placeholder="https://github.com/users/you/projects/1"
-          onChange={(e) => applyUrl(e.target.value)}
-          onPaste={(e) => {
-            if (applyUrl(e.clipboardData.getData('text'))) e.preventDefault();
-          }}
-        />
+        <div className="cpb-input-row">
+          <input
+            id="cpb-url"
+            className="cpb-input"
+            // Controlled now. Uncontrolled plus a cancelled default was the reason a
+            // recognised URL left this box blank.
+            value={url}
+            placeholder="https://github.com/users/you/projects/1"
+            onChange={(e) => {
+              setUrl(e.target.value);
+              applyUrl(e.target.value);
+            }}
+            onPasteCapture={handlePaste(url, setUrl, { detectUrl: true })}
+            autoFocus
+          />
+          <button className="cpb-btn cpb-paste" onClick={() => void pasteFromClipboard(setUrl, { detectUrl: true })} title="Paste from clipboard">
+            Paste
+          </button>
+        </div>
         <div className="cpb-hint">Paste it and the two fields below fill themselves in.</div>
 
         <div className="cpb-row2">
           <div>
             <label className="cpb-label" htmlFor="cpb-owner">Owner</label>
-            <input id="cpb-owner" className="cpb-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="edgeroute" />
+            <input
+              id="cpb-owner"
+              className="cpb-input"
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              onPasteCapture={handlePaste(owner, setOwner)}
+              placeholder="edgeroute"
+            />
           </div>
           <div>
             <label className="cpb-label" htmlFor="cpb-number">Project #</label>
-            <input id="cpb-number" className="cpb-input" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="1" inputMode="numeric" />
+            <input
+              id="cpb-number"
+              className="cpb-input"
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
+              // Pasting the whole URL here is the commonest mis-aim, so it is detected
+              // rather than stripped down to the digits it happens to contain.
+              onPasteCapture={handlePaste(number, setNumber, { digitsOnly: true })}
+              placeholder="1"
+              inputMode="numeric"
+            />
           </div>
         </div>
 
@@ -70,15 +203,24 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           {initial.tokenSource === 'config' && <span className="cpb-tag">saved</span>}
           {initial.tokenSource === 'env' && <span className="cpb-tag">from GH_TOKEN</span>}
         </label>
-        <input
-          id="cpb-token"
-          className="cpb-input"
-          type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder={initial.tokenSource === 'none' ? 'ghp_…' : 'leave blank to keep the current one'}
-          autoComplete="off"
-        />
+        <div className="cpb-input-row">
+          <input
+            id="cpb-token"
+            className="cpb-input"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            // `detectUrl: false` — a token is opaque and must never be reinterpreted,
+            // and the URL check would be a needless look at a secret besides.
+            onPasteCapture={handlePaste(token, setToken, { detectUrl: false })}
+            placeholder={initial.tokenSource === 'none' ? 'ghp_…' : 'leave blank to keep the current one'}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button className="cpb-btn cpb-paste" onClick={() => void pasteFromClipboard(setToken, { detectUrl: false })} title="Paste from clipboard">
+            Paste
+          </button>
+        </div>
         {/*
           This warning is the single most valuable thing on this form. A fine-grained
           token is the obvious modern choice and it cannot work: GitHub exposes a

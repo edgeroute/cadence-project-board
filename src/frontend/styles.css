@@ -348,6 +348,13 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--cpb-panel-2); border-radius: 3px; padding: 0 3px;
 }
+/* A field with its own Paste button beside it — the escape hatch for a host that
+   swallows the paste event. `align-items: stretch` so the button matches the input's
+   height rather than the 32px it would otherwise keep. */
+.cpb-input-row { display: flex; gap: 6px; align-items: stretch; }
+.cpb-input-row .cpb-input { flex: 1; min-width: 0; }
+.cpb-paste { flex-shrink: 0; }
+
 .cpb-row2 { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }
 .cpb-tag {
   font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;
