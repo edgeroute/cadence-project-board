@@ -1136,21 +1136,21 @@ var init_token_cache = __esm({
       async getToken() {
         const force = this.nextForce;
         this.nextForce = false;
-        const cached2 = this.cached;
-        if (force || cached2 == null) {
+        const cached = this.cached;
+        if (force || cached == null) {
           const token2 = await this.refresh(force);
           return token2.token;
         }
-        if (cached2.expiresAt == null) {
-          return cached2.token;
+        if (cached.expiresAt == null) {
+          return cached.token;
         }
-        const remaining = cached2.expiresAt - nowAsSeconds();
+        const remaining = cached.expiresAt - nowAsSeconds();
         if (remaining > ADVISORY_REFRESH_THRESHOLD_IN_SECONDS) {
-          return cached2.token;
+          return cached.token;
         }
         if (remaining > MANDATORY_REFRESH_THRESHOLD_IN_SECONDS) {
           this.backgroundRefresh();
-          return cached2.token;
+          return cached.token;
         }
         const token = await this.refresh();
         return token.token;
@@ -2637,9 +2637,9 @@ function getName(value, stripPath) {
 }
 function supportsFormData(fetchObject) {
   const fetch2 = typeof fetchObject === "function" ? fetchObject : fetchObject.fetch;
-  const cached2 = supportsFormDataMap.get(fetch2);
-  if (cached2)
-    return cached2;
+  const cached = supportsFormDataMap.get(fetch2);
+  if (cached)
+    return cached;
   const promise = (async () => {
     try {
       const FetchResponse = "Response" in fetch2 ? fetch2.Response : (await fetch2("data:,")).constructor;
@@ -12565,25 +12565,31 @@ function fieldByName(fields, name) {
 var import_child_process = require("child_process");
 var import_os = __toESM(require("os"));
 var TIMEOUT_MS = 18e4;
-var cached = null;
+var PROBE_TIMEOUT_MS = 1e4;
+var probe = null;
 function isAvailable() {
-  if (cached !== null) return Promise.resolve(cached);
-  return new Promise((resolve4) => {
+  if (probe) return probe;
+  probe = new Promise((resolve4) => {
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve4(ok);
+    };
     const child = (0, import_child_process.spawn)("claude", ["--version"], {
       env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
       stdio: ["ignore", "ignore", "ignore"]
     });
-    const done = (ok) => {
-      cached = ok;
-      resolve4(ok);
-    };
-    child.on("error", () => done(false));
-    child.on("exit", (code) => done(code === 0));
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       child.kill();
-      done(false);
-    }, 1e4).unref();
+      finish(false);
+    }, PROBE_TIMEOUT_MS);
+    timer.unref();
+    child.on("error", () => finish(false));
+    child.on("exit", (code) => finish(code === 0));
   });
+  return probe;
 }
 var ClaudeCliError = class extends Error {
 };
@@ -13025,8 +13031,8 @@ async function graphql(token, query2, variables) {
 }
 var ownerTypes = /* @__PURE__ */ new Map();
 async function resolveOwnerRoot(token, login) {
-  const cached2 = ownerTypes.get(login);
-  if (cached2) return cached2;
+  const cached = ownerTypes.get(login);
+  if (cached) return cached;
   const res = await fetch(`${REST}/users/${encodeURIComponent(login)}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
   }).catch((e) => {

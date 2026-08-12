@@ -35,7 +35,17 @@ import os from 'os';
 /** Long enough for a real board with adaptive thinking; short enough to give up on. */
 const TIMEOUT_MS = 180_000;
 
-let cached: boolean | null = null;
+/** A guard against a `claude` that hangs instead of answering. Answering takes ~0.2s. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * The probe, memoised as a **promise** rather than as its result.
+ *
+ * Memoising the boolean instead lets two concurrent callers — `publicConfig` on tab load
+ * and `prioritize` on a click — each spawn their own child before either has finished.
+ * Holding the in-flight promise means the second caller waits for the first probe.
+ */
+let probe: Promise<boolean> | null = null;
 
 /**
  * Whether the `claude` binary can be run at all.
@@ -43,27 +53,44 @@ let cached: boolean | null = null;
  * Probed by actually executing `claude --version` rather than by looking for the file:
  * `PATH` inside the plugin subprocess is not the shell's, the binary may be a wrapper
  * script that fails on its own, and "is on disk" is not the question anyone cares about.
- * Cached for the process's life — a CLI does not appear mid-session, and this is checked
- * on every board render.
+ * Cached for the process's life — a CLI does not appear mid-session, and this is asked on
+ * every board render.
+ *
+ * **The settle must be idempotent, and the timer must be cleared.** The first version of
+ * this let the timeout callback run unconditionally after a successful probe: it resolved
+ * nothing, because the promise had already resolved, but it still reassigned the cached
+ * result — so the answer was `true` for ten seconds and `false` for the rest of the
+ * process's life. The board reported "the claude CLI could not be run" while the CLI sat
+ * on `PATH` answering `--version` in 0.16s, and the only way to see the working path was
+ * to click AI Prioritize within ten seconds of opening the tab.
  */
 export function isAvailable(): Promise<boolean> {
-  if (cached !== null) return Promise.resolve(cached);
-  return new Promise((resolve) => {
+  if (probe) return probe;
+  probe = new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+
     const child = spawn('claude', ['--version'], {
       env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' },
       stdio: ['ignore', 'ignore', 'ignore']
     });
-    const done = (ok: boolean) => {
-      cached = ok;
-      resolve(ok);
-    };
-    child.on('error', () => done(false));
-    child.on('exit', (code) => done(code === 0));
-    setTimeout(() => {
+
+    const timer = setTimeout(() => {
       child.kill();
-      done(false);
-    }, 10_000).unref();
+      finish(false);
+    }, PROBE_TIMEOUT_MS);
+    // Nothing should be held open by a probe that has already answered.
+    timer.unref();
+
+    child.on('error', () => finish(false));
+    child.on('exit', (code) => finish(code === 0));
   });
+  return probe;
 }
 
 export class ClaudeCliError extends Error {}
