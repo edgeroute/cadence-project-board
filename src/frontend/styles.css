@@ -290,6 +290,22 @@
 }
 .cpb-modal--narrow { max-width: 440px; }
 
+/*
+ * Nothing in the modal may be shrunk by the modal.
+ *
+ * This is the general form of the bug that made the issue body collapse to a one-word
+ * sliver. `.cpb-modal` is a flex column with a `max-height`, so any child that can
+ * shrink will, once the content exceeds it — and a child becomes shrinkable simply by
+ * having `overflow` set to anything but `visible`, because that resolves its
+ * `min-height: auto` to 0. Two children already qualify (the body panel and, through
+ * its own wrapper, the comment list), and the next scrollable panel added here would
+ * qualify silently.
+ *
+ * The modal itself carries `overflow-y: auto`, so the honest overflow behaviour is
+ * "the dialog scrolls", not "one panel inside it is crushed".
+ */
+.cpb-modal > * { flex-shrink: 0; }
+
 .cpb-modal-head { display: flex; align-items: flex-start; gap: 12px; }
 .cpb-modal-titles { flex: 1; min-width: 0; }
 .cpb-modal-title { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; }
@@ -315,6 +331,23 @@
 .cpb-opt--on { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }
 .cpb-opt--clear { color: var(--cpb-dim); }
 
+/*
+ * The issue body.
+ *
+ * `flex-shrink: 0` is load-bearing and its absence was a real, reported bug: a bordered
+ * box below Size showing nothing but the word "What".
+ *
+ * `.cpb-modal` is a `flex-direction: column` box with `max-height: 86vh`. A flex item
+ * whose `overflow` is not `visible` gets `min-height: auto` resolved to **0**, which
+ * makes it freely shrinkable — so on any issue whose modal overflowed 86vh, this panel
+ * was squeezed to a sliver and showed only its first rendered line. The issues on this
+ * board open with a `## What` heading, so that sliver read as a mysterious box
+ * containing one word.
+ *
+ * The `max-height` is what makes a long body scroll inside its own panel rather than
+ * pushing the comments off the bottom; `flex-shrink: 0` is what stops the *flex
+ * container* taking that height back. Both are needed, and neither implies the other.
+ */
 .cpb-body {
   margin: 0;
   background: var(--cpb-panel);
@@ -322,6 +355,7 @@
   border-radius: 8px;
   padding: 10px 12px;
   max-height: 300px; overflow-y: auto;
+  flex-shrink: 0;
 }
 
 /* ---------- rendered markdown ---------- */
@@ -445,10 +479,14 @@
 /* Capped and scrolled rather than growing the modal: the modal is already
    `max-height: 86vh`, so an uncapped thread would push the composer — the one control
    here — below the fold on any issue with a real discussion on it. */
+/* `flex-shrink: 0` for the same reason `.cpb-body` needs it — this is a scrollable
+   panel inside `.cpb-comments`, which is itself a flex column. The rule on
+   `.cpb-modal > *` does not reach here, because this is a grandchild. */
 .cpb-comment-list {
   display: flex; flex-direction: column; gap: 8px;
   max-height: 280px; overflow-y: auto;
   padding-right: 2px;
+  flex-shrink: 0;
 }
 
 .cpb-comment {
