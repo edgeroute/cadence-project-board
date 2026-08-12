@@ -1,5 +1,6 @@
 import path from 'path';
 import { DEFAULT_MODEL } from './ai.service';
+import * as claudeCli from './claude-cli.service';
 import { promises as fs } from 'fs';
 
 const CONFIG_DIR = '.CadenceBoard';
@@ -109,6 +110,13 @@ export async function publicConfig(projectPath: string): Promise<{
   enabled: boolean;
   tokenSource: 'config' | 'env' | 'none';
   aiKeySource: 'config' | 'env' | 'none';
+  /**
+   * Whether the local Claude Code CLI can be run, which is what makes the API key
+   * genuinely optional rather than nominally optional. The settings screen needs this to
+   * tell those two states apart: "no key, and AI Prioritize works anyway" and "no key,
+   * and AI Prioritize falls back to keyword scoring" look identical without it.
+   */
+  claudeCli: boolean;
   aiModel: string;
 }> {
   let parsed: BoardConfigFile | null = null;
@@ -128,6 +136,7 @@ export async function publicConfig(projectPath: string): Promise<{
     // Presence only. The key itself never crosses the RPC boundary, exactly as the
     // GitHub token does not.
     aiKeySource,
+    claudeCli: await claudeCli.isAvailable(),
     aiModel: parsed?.aiModel?.trim() || DEFAULT_MODEL
   };
 }

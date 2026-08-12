@@ -7744,7 +7744,7 @@ const SettingsModal = ({ initial, saving, error, onSave, onClose }) => {
         autoComplete: "off",
         spellCheck: false
       }
-    ), /* @__PURE__ */ React.createElement("button", { className: "cpb-btn cpb-paste", onClick: () => void pasteFromClipboard(setToken, { detectUrl: false }), title: "Paste from clipboard" }, "Paste")), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Must be a ", /* @__PURE__ */ React.createElement("strong", null, "classic"), " token with ", /* @__PURE__ */ React.createElement("code", null, "repo"), " and ", /* @__PURE__ */ React.createElement("code", null, "project"), " scopes. Fine-grained tokens cannot read user-owned projects at all."), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "It is written to ", /* @__PURE__ */ React.createElement("code", null, ".CadenceBoard/project-board.json"), " in this project, and that directory is added to ", /* @__PURE__ */ React.createElement("code", null, ".gitignore"), "."), /* @__PURE__ */ React.createElement("div", { className: "cpb-section-rule" }), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-ai-key" }, "Anthropic API key", initial.aiKeySource === "config" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "saved"), initial.aiKeySource === "env" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "from ANTHROPIC_API_KEY"), initial.aiKeySource === "none" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag cpb-tag--muted" }, "optional")), /* @__PURE__ */ React.createElement("div", { className: "cpb-input-row" }, /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement("button", { className: "cpb-btn cpb-paste", onClick: () => void pasteFromClipboard(setToken, { detectUrl: false }), title: "Paste from clipboard" }, "Paste")), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Must be a ", /* @__PURE__ */ React.createElement("strong", null, "classic"), " token with ", /* @__PURE__ */ React.createElement("code", null, "repo"), " and ", /* @__PURE__ */ React.createElement("code", null, "project"), " scopes. Fine-grained tokens cannot read user-owned projects at all."), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "It is written to ", /* @__PURE__ */ React.createElement("code", null, ".CadenceBoard/project-board.json"), " in this project, and that directory is added to ", /* @__PURE__ */ React.createElement("code", null, ".gitignore"), "."), /* @__PURE__ */ React.createElement("div", { className: "cpb-section-rule" }), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-ai-key" }, "Anthropic API key", initial.aiKeySource === "config" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "saved"), initial.aiKeySource === "env" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag" }, "from ANTHROPIC_API_KEY"), initial.aiKeySource === "none" && /* @__PURE__ */ React.createElement("span", { className: "cpb-tag cpb-tag--muted" }, initial.claudeCli ? "not needed" : "optional")), /* @__PURE__ */ React.createElement("div", { className: "cpb-input-row" }, /* @__PURE__ */ React.createElement(
       "input",
       {
         id: "cpb-ai-key",
@@ -7765,7 +7765,7 @@ const SettingsModal = ({ initial, saving, error, onSave, onClose }) => {
         title: "Paste from clipboard"
       },
       "Paste"
-    )), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Only used by ", /* @__PURE__ */ React.createElement("strong", null, "AI Prioritize"), ". Without it that button still works — it falls back to keyword scoring, which needs no key and sends nothing anywhere."), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "When it is set, the title, labels, comment count, age and the first 600 characters of each issue body are sent to Anthropic. Nothing else — not your token, not the comment threads, not the repository."), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-ai-model" }, "Model"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, initial.claudeCli ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Only used by ", /* @__PURE__ */ React.createElement("strong", null, "AI Prioritize"), ", and only if you want it to bill an API account. Left blank, that button uses the ", /* @__PURE__ */ React.createElement("code", null, "claude"), " CLI you are already signed in to on this machine — same models, no second credential.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Only used by ", /* @__PURE__ */ React.createElement("strong", null, "AI Prioritize"), ". The ", /* @__PURE__ */ React.createElement("code", null, "claude"), " CLI could not be run here, so without a key that button falls back to keyword scoring — which needs no key and sends nothing anywhere.")), /* @__PURE__ */ React.createElement("div", { className: "cpb-hint" }, "Either way, what leaves this machine is the same: the title, labels, comment count, age and the first 600 characters of each issue body. Nothing else — not your token, not the comment threads, not the repository."), /* @__PURE__ */ React.createElement("label", { className: "cpb-label", htmlFor: "cpb-ai-model" }, "Model"), /* @__PURE__ */ React.createElement(
       "input",
       {
         id: "cpb-ai-model",
@@ -7906,6 +7906,11 @@ function sortItems(items, sort, fields) {
     return c !== 0 ? c : a.index - b.index;
   }).map((x2) => x2.item);
 }
+const ENGINE_LABEL = {
+  "claude-api": "Read by Claude",
+  "claude-cli": "Read by Claude, via your Claude Code login",
+  heuristic: "Keyword scoring"
+};
 const SuggestionsPanel = ({
   result,
   current,
@@ -7931,7 +7936,7 @@ const SuggestionsPanel = ({
       "aria-modal": "true",
       "aria-label": "Suggested priorities and sizes"
     },
-    /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-head" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-titles" }, /* @__PURE__ */ React.createElement("h2", { className: "cpb-modal-title" }, "Suggested Priority and Size"), /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-sub" }, result.source === "claude" ? "Read by Claude" : "Keyword scoring", " ·", " ", changes.length, " of ", result.suggestions.length, " would change")), /* @__PURE__ */ React.createElement("button", { className: "cpb-close", onClick: onClose, "aria-label": "Close", disabled: applying }, "✕")),
+    /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-head" }, /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-titles" }, /* @__PURE__ */ React.createElement("h2", { className: "cpb-modal-title" }, "Suggested Priority and Size"), /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-sub" }, ENGINE_LABEL[result.source] ?? "Keyword scoring", " · ", changes.length, " of", " ", result.suggestions.length, " would change")), /* @__PURE__ */ React.createElement("button", { className: "cpb-close", onClick: onClose, "aria-label": "Close", disabled: applying }, "✕")),
     /* @__PURE__ */ React.createElement("div", { className: "cpb-modal-scroll" }, result.note && /* @__PURE__ */ React.createElement("div", { className: "cpb-error", role: "status" }, result.note), changes.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "cpb-comments-empty" }, "Nothing to change — every item already carries the suggested Priority and Size.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("label", { className: "cpb-suggest-all" }, /* @__PURE__ */ React.createElement(
       "input",
       {
@@ -8054,7 +8059,7 @@ const App = () => {
       const cfg = await api.rpc("GET", `/config?path=${encodeURIComponent(projectPath)}`);
       setSettings(cfg);
     } catch (e) {
-      setSettings({ owner: "", projectNumber: null, enabled: true, tokenSource: "none", aiKeySource: "none", aiModel: "claude-opus-5" });
+      setSettings({ owner: "", projectNumber: null, enabled: true, tokenSource: "none", aiKeySource: "none", claudeCli: false, aiModel: "claude-opus-5" });
       setSettingsError(e.message);
     }
   };

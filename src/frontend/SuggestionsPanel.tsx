@@ -11,9 +11,16 @@ export interface Suggestion {
 
 export interface PrioritizeResult {
   suggestions: Suggestion[];
-  source: 'claude' | 'heuristic';
+  source: 'claude-api' | 'claude-cli' | 'heuristic';
   note?: string;
 }
+
+/** Mirrors `PrioritizeResult['source']` on the backend — kept exhaustive on purpose. */
+const ENGINE_LABEL: Record<PrioritizeResult['source'], string> = {
+  'claude-api': 'Read by Claude',
+  'claude-cli': 'Read by Claude, via your Claude Code login',
+  heuristic: 'Keyword scoring'
+};
 
 interface Props {
   result: PrioritizeResult;
@@ -76,9 +83,10 @@ export const SuggestionsPanel: React.FC<Props> = ({
               {/* Which engine answered is stated plainly and always. A heuristic guess
                   presented as a model's read is the one thing that would make this
                   feature untrustworthy — and the heuristic runs whenever the model
-                  cannot, which is not a rare path. */}
-              {result.source === 'claude' ? 'Read by Claude' : 'Keyword scoring'} ·{' '}
-              {changes.length} of {result.suggestions.length} would change
+                  cannot, which is not a rare path. The two Claude paths are named
+                  apart because they spend different accounts. */}
+              {ENGINE_LABEL[result.source] ?? 'Keyword scoring'} · {changes.length} of{' '}
+              {result.suggestions.length} would change
             </div>
           </div>
           <button className="cpb-close" onClick={onClose} aria-label="Close" disabled={applying}>

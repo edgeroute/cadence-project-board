@@ -24,6 +24,7 @@ interface ConfigShape {
   enabled: boolean;
   tokenSource: 'config' | 'env' | 'none';
   aiKeySource: 'config' | 'env' | 'none';
+  claudeCli: boolean;
   aiModel: string;
 }
 
@@ -134,7 +135,7 @@ export const App: React.FC = () => {
       const cfg = (await api.rpc('GET', `/config?path=${encodeURIComponent(projectPath)}`)) as ConfigShape;
       setSettings(cfg);
     } catch (e) {
-      setSettings({ owner: '', projectNumber: null, enabled: true, tokenSource: 'none', aiKeySource: 'none', aiModel: 'claude-opus-5' });
+      setSettings({ owner: '', projectNumber: null, enabled: true, tokenSource: 'none', aiKeySource: 'none', claudeCli: false, aiModel: 'claude-opus-5' });
       setSettingsError((e as Error).message);
     }
   };

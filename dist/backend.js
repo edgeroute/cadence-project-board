@@ -1136,21 +1136,21 @@ var init_token_cache = __esm({
       async getToken() {
         const force = this.nextForce;
         this.nextForce = false;
-        const cached = this.cached;
-        if (force || cached == null) {
+        const cached2 = this.cached;
+        if (force || cached2 == null) {
           const token2 = await this.refresh(force);
           return token2.token;
         }
-        if (cached.expiresAt == null) {
-          return cached.token;
+        if (cached2.expiresAt == null) {
+          return cached2.token;
         }
-        const remaining = cached.expiresAt - nowAsSeconds();
+        const remaining = cached2.expiresAt - nowAsSeconds();
         if (remaining > ADVISORY_REFRESH_THRESHOLD_IN_SECONDS) {
-          return cached.token;
+          return cached2.token;
         }
         if (remaining > MANDATORY_REFRESH_THRESHOLD_IN_SECONDS) {
           this.backgroundRefresh();
-          return cached.token;
+          return cached2.token;
         }
         const token = await this.refresh();
         return token.token;
@@ -1502,8 +1502,8 @@ var init_credentials = __esm({
       if (configDir) {
         return configDir;
       }
-      const os = getPlatformHeaders()["X-Stainless-OS"];
-      if (os === "Windows") {
+      const os2 = getPlatformHeaders()["X-Stainless-OS"];
+      if (os2 === "Windows") {
         const appData = readEnv("APPDATA");
         if (appData) {
           return path7.join(appData, "Anthropic");
@@ -2637,9 +2637,9 @@ function getName(value, stripPath) {
 }
 function supportsFormData(fetchObject) {
   const fetch2 = typeof fetchObject === "function" ? fetchObject : fetchObject.fetch;
-  const cached = supportsFormDataMap.get(fetch2);
-  if (cached)
-    return cached;
+  const cached2 = supportsFormDataMap.get(fetch2);
+  if (cached2)
+    return cached2;
   const promise = (async () => {
     try {
       const FetchResponse = "Response" in fetch2 ? fetch2.Response : (await fetch2("data:,")).constructor;
@@ -12561,6 +12561,97 @@ function fieldByName(fields, name) {
   return fields.find((f) => f.name.toLowerCase() === lowered) ?? null;
 }
 
+// src/backend/claude-cli.service.ts
+var import_child_process = require("child_process");
+var import_os = __toESM(require("os"));
+var TIMEOUT_MS = 18e4;
+var cached = null;
+function isAvailable() {
+  if (cached !== null) return Promise.resolve(cached);
+  return new Promise((resolve4) => {
+    const child = (0, import_child_process.spawn)("claude", ["--version"], {
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    const done = (ok) => {
+      cached = ok;
+      resolve4(ok);
+    };
+    child.on("error", () => done(false));
+    child.on("exit", (code) => done(code === 0));
+    setTimeout(() => {
+      child.kill();
+      done(false);
+    }, 1e4).unref();
+  });
+}
+var ClaudeCliError = class extends Error {
+};
+function ask(model, prompt) {
+  return new Promise((resolve4, reject) => {
+    const child = (0, import_child_process.spawn)("claude", ["-p", "--output-format", "json", "--model", model], {
+      cwd: import_os.default.tmpdir(),
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let out = "";
+    let err = "";
+    let settled = false;
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(() => reject(new ClaudeCliError(`Claude took longer than ${TIMEOUT_MS / 1e3}s.`)));
+    }, TIMEOUT_MS);
+    child.stdout.on("data", (d) => {
+      out += d.toString();
+    });
+    child.stderr.on("data", (d) => {
+      err += d.toString();
+    });
+    child.on(
+      "error",
+      (e) => finish(() => reject(new ClaudeCliError(`Could not run the claude CLI: ${e.message}`)))
+    );
+    child.on(
+      "close",
+      (code) => finish(() => {
+        if (code !== 0) {
+          return reject(new ClaudeCliError(err.trim().slice(0, 300) || `claude exited ${code}.`));
+        }
+        let envelope;
+        try {
+          envelope = JSON.parse(out);
+        } catch {
+          return reject(new ClaudeCliError("claude returned output that was not JSON."));
+        }
+        if (envelope.is_error || typeof envelope.result !== "string") {
+          return reject(new ClaudeCliError(envelope.result?.slice(0, 300) || "claude reported an error."));
+        }
+        resolve4(envelope.result);
+      })
+    );
+    child.stdin.on("error", () => {
+    });
+    child.stdin.end(prompt);
+  });
+}
+function extractJson(text) {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+  }
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start === -1 || end <= start) throw new ClaudeCliError("Claude did not return any JSON.");
+  return JSON.parse(trimmed.slice(start, end + 1));
+}
+
 // src/backend/ai.service.ts
 var EXCERPT_CHARS = 600;
 var MAX_ITEMS = 200;
@@ -12660,7 +12751,16 @@ Rules:
   restate the title.
 - If an item genuinely gives you nothing to judge on, say so in the reason and still
   pick the middle option rather than refusing.`;
-async function askClaude(apiKey, model, briefs, priorities, sizes) {
+function userPrompt(briefs, priorities, sizes) {
+  return [
+    `Priority options, most urgent first: ${priorities.join(", ")}`,
+    `Size options, smallest first: ${sizes.join(", ")}`,
+    "",
+    "Items:",
+    JSON.stringify(briefs.map((b, index) => ({ index, ...b })), null, 1)
+  ].join("\n");
+}
+async function askClaudeApi(apiKey, model, briefs, priorities, sizes) {
   const client = new Anthropic({ apiKey });
   const schema = {
     type: "object",
@@ -12688,18 +12788,7 @@ async function askClaude(apiKey, model, briefs, priorities, sizes) {
     max_tokens: MAX_TOKENS,
     system: SYSTEM,
     output_config: { format: { type: "json_schema", schema } },
-    messages: [
-      {
-        role: "user",
-        content: [
-          `Priority options, most urgent first: ${priorities.join(", ")}`,
-          `Size options, smallest first: ${sizes.join(", ")}`,
-          "",
-          "Items:",
-          JSON.stringify(briefs.map((b, index) => ({ index, ...b })), null, 1)
-        ].join("\n")
-      }
-    ]
+    messages: [{ role: "user", content: userPrompt(briefs, priorities, sizes) }]
   });
   const message = await stream.finalMessage();
   if (message.stop_reason === "refusal") {
@@ -12709,6 +12798,21 @@ async function askClaude(apiKey, model, briefs, priorities, sizes) {
   if (!text) throw new Error("Claude returned no suggestions.");
   const parsed = JSON.parse(text);
   return parsed.suggestions ?? [];
+}
+async function askClaudeCli(model, briefs, priorities, sizes) {
+  const prompt = [
+    SYSTEM,
+    "",
+    // Stated twice as strongly as the API path needs to state it: there, the schema is
+    // enforced by the server, and the prompt is a hint. Here, the prompt is all there is.
+    "Reply with a single JSON object and nothing else \u2014 no prose before or after it, no",
+    "markdown code fence. Its shape is exactly:",
+    '{"suggestions":[{"index":<integer>,"priority":<option name>,"size":<option name>,"reason":<string>}]}',
+    "",
+    userPrompt(briefs, priorities, sizes)
+  ].join("\n");
+  const parsed = extractJson(await ask(model, prompt));
+  return Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
 }
 async function prioritize(board, items, apiKey, model) {
   const priorityField = fieldByName(board.fields, PRIORITY_FIELD);
@@ -12723,18 +12827,24 @@ async function prioritize(board, items, apiKey, model) {
     const h = heuristicFor(b, priorities, sizes);
     return { itemId: ids[i], number: b.number, title: b.title, priority: h.priority, size: h.size, reason: h.reason };
   });
-  if (!apiKey) {
-    return { suggestions, source: "heuristic", note: "No Anthropic API key set, so these come from keyword scoring. Add one in Settings for a real read of each issue." };
+  const engine = apiKey ? "api" : await isAvailable() ? "cli" : null;
+  if (!engine) {
+    return {
+      suggestions,
+      source: "heuristic",
+      note: "These come from keyword scoring: there is no Anthropic API key set, and the claude CLI could not be run. Either one gets you a real read of each issue."
+    };
   }
   try {
-    for (const s of await askClaude(apiKey, model, briefs, priorities, sizes)) {
+    const proposed = engine === "api" ? await askClaudeApi(apiKey, model, briefs, priorities, sizes) : await askClaudeCli(model, briefs, priorities, sizes);
+    for (const s of proposed) {
       if (!Number.isInteger(s.index) || s.index < 0 || s.index >= suggestions.length) continue;
       const target = suggestions[s.index];
       if (priorities.includes(s.priority)) target.priority = s.priority;
       if (sizes.includes(s.size)) target.size = s.size;
       if (s.reason) target.reason = s.reason;
     }
-    return { suggestions, source: "claude" };
+    return { suggestions, source: engine === "api" ? "claude-api" : "claude-cli" };
   } catch (e) {
     return {
       suggestions,
@@ -12808,6 +12918,7 @@ async function publicConfig(projectPath) {
     // Presence only. The key itself never crosses the RPC boundary, exactly as the
     // GitHub token does not.
     aiKeySource,
+    claudeCli: await isAvailable(),
     aiModel: parsed?.aiModel?.trim() || DEFAULT_MODEL
   };
 }
@@ -12914,8 +13025,8 @@ async function graphql(token, query2, variables) {
 }
 var ownerTypes = /* @__PURE__ */ new Map();
 async function resolveOwnerRoot(token, login) {
-  const cached = ownerTypes.get(login);
-  if (cached) return cached;
+  const cached2 = ownerTypes.get(login);
+  if (cached2) return cached2;
   const res = await fetch(`${REST}/users/${encodeURIComponent(login)}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
   }).catch((e) => {

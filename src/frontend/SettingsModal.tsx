@@ -6,6 +6,7 @@ interface Props {
     projectNumber: number | null;
     tokenSource: 'config' | 'env' | 'none';
     aiKeySource: 'config' | 'env' | 'none';
+    claudeCli: boolean;
     aiModel: string;
   };
   saving: boolean;
@@ -267,7 +268,14 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           Anthropic API key
           {initial.aiKeySource === 'config' && <span className="cpb-tag">saved</span>}
           {initial.aiKeySource === 'env' && <span className="cpb-tag">from ANTHROPIC_API_KEY</span>}
-          {initial.aiKeySource === 'none' && <span className="cpb-tag cpb-tag--muted">optional</span>}
+          {/* "optional" and "not needed" are different claims, and the difference is
+              whether leaving this blank costs you the feature. Only the CLI probe can
+              tell them apart, so the tag reports the probe rather than guessing. */}
+          {initial.aiKeySource === 'none' && (
+            <span className="cpb-tag cpb-tag--muted">
+              {initial.claudeCli ? 'not needed' : 'optional'}
+            </span>
+          )}
         </label>
         <div className="cpb-input-row">
           <input
@@ -292,13 +300,24 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           </button>
         </div>
         <div className="cpb-hint">
-          Only used by <strong>AI Prioritize</strong>. Without it that button still works — it falls
-          back to keyword scoring, which needs no key and sends nothing anywhere.
+          {initial.claudeCli ? (
+            <>
+              Only used by <strong>AI Prioritize</strong>, and only if you want it to bill an API
+              account. Left blank, that button uses the <code>claude</code> CLI you are already
+              signed in to on this machine — same models, no second credential.
+            </>
+          ) : (
+            <>
+              Only used by <strong>AI Prioritize</strong>. The <code>claude</code> CLI could not be
+              run here, so without a key that button falls back to keyword scoring — which needs no
+              key and sends nothing anywhere.
+            </>
+          )}
         </div>
         <div className="cpb-hint">
-          When it is set, the title, labels, comment count, age and the first 600 characters of each
-          issue body are sent to Anthropic. Nothing else — not your token, not the comment threads,
-          not the repository.
+          Either way, what leaves this machine is the same: the title, labels, comment count, age and
+          the first 600 characters of each issue body. Nothing else — not your token, not the comment
+          threads, not the repository.
         </div>
 
         <label className="cpb-label" htmlFor="cpb-ai-model">Model</label>

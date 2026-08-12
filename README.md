@@ -23,6 +23,26 @@ The token is written to `.CadenceBoard/project-board.json` in the open project, 
 
 ⚠️ **Inside claudecodeui the config file is the only way in.** The host starts a plugin's server with a deliberately minimal environment — `PATH`, `HOME`, `NODE_ENV`, `PLUGIN_NAME` and nothing else — so a `GH_TOKEN` exported in the shell that launched claudecodeui is not visible to this plugin. `$GH_TOKEN` / `$GITHUB_TOKEN` / `$ANTHROPIC_API_KEY` still work when the backend is run directly, which is how this repo's smoke tests authenticate, but they are not an answer inside the host.
 
+## AI Prioritize needs no API key
+
+**By default it asks the `claude` CLI you are already signed in to**, so the feature works out of the box for anyone running claudecodeui — which is everyone using this plugin. There is no second credential and no second bill.
+
+That works because the host's minimal environment keeps the two variables that matter: `PATH` finds the binary, and `HOME` finds `~/.claude/.credentials.json`. The stripped environment kills *env-var* credentials, not file-based ones.
+
+Engines are tried in this order:
+
+| | |
+| :-- | :-- |
+| **Anthropic API key**, if one is set | Explicit configuration beats an ambient credential — the same precedence the GitHub token follows. Someone who went and pasted a key meant to use it, and quietly spending their Claude Code subscription instead would bill the wrong account |
+| **The local `claude` CLI** | `claude -p --output-format json`, one headless turn, run in an empty temp directory so no project context leaks into a triage prompt |
+| **Keyword scoring** | No credential, nothing leaves the machine. Also the floor under both model paths: it runs first every time and the model's answers are merged over it, so a model that returns 15 rows for 17 items leaves two scored rows rather than two blanks |
+
+The review panel names the engine that answered, and names the two Claude paths apart, because they differ in whose account is spent.
+
+One caveat worth knowing if you change this code: `-p` has no equivalent of `output_config.format`, so the CLI path has **nothing constraining the reply to the schema**. Every returned option name is checked against the project's live field options before it can reach a write. On the API path that check is belt-and-braces; on the CLI path it is the only thing between an invented `P3` and a mutation.
+
+Whichever engine runs, what leaves the machine is the same and is decided in one function (`buildInput`): title, labels, comment count, age, and the first 600 characters of the body. Not the token, not the comment threads, not the repository.
+
 ## Where Priority and Size live
 
 The **project field is the source of truth**, and a matching label is mirrored onto the issue.
@@ -42,7 +62,7 @@ The mirror is one-directional. Nothing here ever reads a label back to decide a 
 | **Search** | Filters by issue number, title or repository |
 | **Filters** | A row under the toolbar for `Priority` and `Size`, built from the project's own options, each with a `None` entry for items where the field is unset. Columns stay on screen when a filter empties them |
 | **Sort** | Orders cards within each column — number, updated, created, comments, title, or by `Priority`/`Size` using the project's own option order. Defaults to the board's own arrangement |
-| **AI Prioritize** | Suggests a `Priority` and a `Size` for the cards currently shown, then lets you review and apply them. Falls back to keyword scoring with no API key |
+| **AI Prioritize** | Suggests a `Priority` and a `Size` for the cards currently shown, then lets you review and apply them. Uses your existing Claude Code login — no API key needed |
 | **Label mirror** | Setting `Priority` or `Size` also writes a matching `priority:P0` / `size:M` label on the issue, so the value is searchable from the issue list |
 | **Columns collapse** | Remembered per project in `localStorage` |
 

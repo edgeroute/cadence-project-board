@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { BoardData, ProjectItem } from '../frontend/types';
 import { fieldByName, PRIORITY_FIELD, SIZE_FIELD } from '../frontend/types';
+import * as claudeCli from './claude-cli.service';
 
 /**
  * Suggesting a Priority and a Size for every item on the board.
@@ -35,8 +36,15 @@ export interface Suggestion {
 
 export interface PrioritizeResult {
   suggestions: Suggestion[];
-  /** Which engine produced these, so the UI can say so rather than implying a model ran. */
-  source: 'claude' | 'heuristic';
+  /**
+   * Which engine produced these, so the UI can say so rather than implying a model ran.
+   *
+   * The two Claude paths are reported separately rather than collapsed into one
+   * `'claude'`, because they differ in the thing a reader would want to know: which
+   * account is being spent. `claude-api` bills the pasted API key; `claude-cli` spends
+   * the Claude Code login already signed in on this machine.
+   */
+  source: 'claude-api' | 'claude-cli' | 'heuristic';
   /** Set when the model was wanted but could not run — the heuristic answered instead. */
   note?: string;
 }
@@ -231,6 +239,17 @@ interface ModelSuggestion {
   reason: string;
 }
 
+/** The board, as the model sees it. Shared so both engines are asked the same question. */
+function userPrompt(briefs: ItemBrief[], priorities: string[], sizes: string[]): string {
+  return [
+    `Priority options, most urgent first: ${priorities.join(', ')}`,
+    `Size options, smallest first: ${sizes.join(', ')}`,
+    '',
+    'Items:',
+    JSON.stringify(briefs.map((b, index) => ({ index, ...b })), null, 1)
+  ].join('\n');
+}
+
 /**
  * Ask Claude for a Priority and a Size per item.
  *
@@ -249,7 +268,7 @@ interface ModelSuggestion {
  * with the answer, so a 100-item board is a long single request — long enough to reach an
  * HTTP timeout on a non-streaming call.
  */
-async function askClaude(
+async function askClaudeApi(
   apiKey: string,
   model: string,
   briefs: ItemBrief[],
@@ -285,18 +304,7 @@ async function askClaude(
     max_tokens: MAX_TOKENS,
     system: SYSTEM,
     output_config: { format: { type: 'json_schema', schema } },
-    messages: [
-      {
-        role: 'user',
-        content: [
-          `Priority options, most urgent first: ${priorities.join(', ')}`,
-          `Size options, smallest first: ${sizes.join(', ')}`,
-          '',
-          'Items:',
-          JSON.stringify(briefs.map((b, index) => ({ index, ...b })), null, 1)
-        ].join('\n')
-      }
-    ]
+    messages: [{ role: 'user', content: userPrompt(briefs, priorities, sizes) }]
   });
 
   const message = await stream.finalMessage();
@@ -315,15 +323,67 @@ async function askClaude(
 }
 
 /**
- * Suggestions for the whole board — from Claude where a key allows it, from the
- * heuristic otherwise.
+ * The same question, asked through the Claude Code CLI already signed in on this machine.
  *
- * The heuristic runs **first, always**, and the model's answers are merged over it. So a
- * model that returns 15 suggestions for 17 items leaves two heuristic rows rather than
+ * This is the path a reader gets **without configuring anything**, and it exists because
+ * requiring an API key here was asking someone to pay twice for Claude while running
+ * inside Claude Code. See `claude-cli.service` for why the binary is reachable at all.
+ *
+ * It differs from the API path in one way that matters: `-p` has no equivalent of
+ * `output_config.format`, so nothing *constrains* the reply to the schema — the shape is
+ * requested in prose and can come back wrong. Two consequences follow:
+ *
+ * - The JSON is extracted rather than parsed, because a headless turn may still wrap it
+ *   in a fence or a sentence (`extractJson`).
+ * - The option-name check in `prioritize` stops being belt-and-braces and becomes the
+ *   only thing standing between an invented `P3` and a write. That check is on the merge
+ *   loop, shared by both engines, and must not be relaxed on the assumption that the
+ *   schema already did the work — on this path there is no schema.
+ */
+async function askClaudeCli(
+  model: string,
+  briefs: ItemBrief[],
+  priorities: string[],
+  sizes: string[]
+): Promise<ModelSuggestion[]> {
+  const prompt = [
+    SYSTEM,
+    '',
+    // Stated twice as strongly as the API path needs to state it: there, the schema is
+    // enforced by the server, and the prompt is a hint. Here, the prompt is all there is.
+    'Reply with a single JSON object and nothing else — no prose before or after it, no',
+    'markdown code fence. Its shape is exactly:',
+    '{"suggestions":[{"index":<integer>,"priority":<option name>,"size":<option name>,"reason":<string>}]}',
+    '',
+    userPrompt(briefs, priorities, sizes)
+  ].join('\n');
+
+  const parsed = claudeCli.extractJson(await claudeCli.ask(model, prompt)) as {
+    suggestions?: ModelSuggestion[];
+  };
+  return Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+}
+
+/**
+ * Suggestions for the whole board, from the best engine available.
+ *
+ * The order is **API key, then the local Claude Code CLI, then keyword scoring.**
+ *
+ * The key comes first because explicit configuration beats an ambient credential — the
+ * same precedence the GitHub token follows. Someone who went and pasted a key meant to
+ * use it, and quietly preferring their Claude Code subscription would spend the wrong
+ * account without asking.
+ *
+ * The CLI comes second because it is free at the point of use for anyone already signed
+ * in to Claude Code, which — this being a claudecodeui plugin — is everyone. It makes the
+ * feature work out of the box rather than behind a credential.
+ *
+ * The heuristic runs **first, always**, and whichever model answers is merged over it. So
+ * a model that returns 15 suggestions for 17 items leaves two heuristic rows rather than
  * two blanks, and a model that fails entirely degrades to a complete heuristic pass
- * instead of an error. The reader is told which engine answered either way — a
- * suggestion labelled as Claude's when a regex produced it is the one outcome that
- * would make this feature untrustworthy.
+ * instead of an error. The reader is told which engine answered either way — a suggestion
+ * labelled as Claude's when a regex produced it is the one outcome that would make this
+ * feature untrustworthy.
  */
 export async function prioritize(
   board: BoardData,
@@ -347,12 +407,23 @@ export async function prioritize(
     return { itemId: ids[i], number: b.number, title: b.title, priority: h.priority, size: h.size, reason: h.reason };
   });
 
-  if (!apiKey) {
-    return { suggestions, source: 'heuristic', note: 'No Anthropic API key set, so these come from keyword scoring. Add one in Settings for a real read of each issue.' };
+  const engine: 'api' | 'cli' | null = apiKey ? 'api' : (await claudeCli.isAvailable()) ? 'cli' : null;
+
+  if (!engine) {
+    return {
+      suggestions,
+      source: 'heuristic',
+      note: 'These come from keyword scoring: there is no Anthropic API key set, and the claude CLI could not be run. Either one gets you a real read of each issue.'
+    };
   }
 
   try {
-    for (const s of await askClaude(apiKey, model, briefs, priorities, sizes)) {
+    const proposed =
+      engine === 'api'
+        ? await askClaudeApi(apiKey as string, model, briefs, priorities, sizes)
+        : await askClaudeCli(model, briefs, priorities, sizes);
+
+    for (const s of proposed) {
       // An out-of-range index is dropped rather than clamped: clamping would attach a
       // model's reasoning about one issue to a different one, which is worse than
       // leaving that row on its heuristic guess.
@@ -362,7 +433,7 @@ export async function prioritize(
       if (sizes.includes(s.size)) target.size = s.size;
       if (s.reason) target.reason = s.reason;
     }
-    return { suggestions, source: 'claude' };
+    return { suggestions, source: engine === 'api' ? 'claude-api' : 'claude-cli' };
   } catch (e) {
     return {
       suggestions,
@@ -370,4 +441,9 @@ export async function prioritize(
       note: `Claude couldn't be reached (${(e as Error).message}) — these are keyword-scored instead.`
     };
   }
+}
+
+/** Whether AI Prioritize can reach a model at all, for the settings screen to report. */
+export function claudeCliAvailable(): Promise<boolean> {
+  return claudeCli.isAvailable();
 }
