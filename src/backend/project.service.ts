@@ -1,4 +1,4 @@
-import type { BoardData, ProjectField, ProjectItem, ItemContent } from '../frontend/types';
+import type { BoardData, ProjectField, ProjectItem, ItemContent, IssueComment } from '../frontend/types';
 import type { ResolvedConfig } from './config.service';
 
 const GRAPHQL = 'https://api.github.com/graphql';
@@ -127,7 +127,7 @@ query($login:String!, $number:Int!, $cursor:String) {
           content {
             ... on DraftIssue { title }
             ... on Issue {
-              number title body state url updatedAt
+              id number title body state url updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -135,7 +135,7 @@ query($login:String!, $number:Int!, $cursor:String) {
               comments { totalCount }
             }
             ... on PullRequest {
-              number title body state url updatedAt
+              id number title body state url updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -161,6 +161,7 @@ query($login:String!, $number:Int!, $cursor:String) {
 interface RawItem {
   id: string;
   content: {
+    id?: string;
     number?: number;
     title?: string;
     body?: string | null;
@@ -204,6 +205,7 @@ function toContent(raw: RawItem): { content: ItemContent | null; draftTitle: str
   return {
     draftTitle: null,
     content: {
+      id: c.id ?? '',
       number: c.number,
       title: c.title ?? '',
       body: c.body ?? null,
@@ -295,6 +297,121 @@ mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!) {
     projectId:$projectId, itemId:$itemId, fieldId:$fieldId
   }) { projectV2Item { id } }
 }`;
+
+/**
+ * The comments on one issue, oldest first.
+ *
+ * `last: 50` rather than `first: 50`. A thread is read from the bottom — the newest
+ * comment is the one that matters and the one a reader is about to reply to — so on a
+ * long thread the right 50 to fetch are the last 50, and they arrive already in
+ * chronological order. `first` would return the opening 50 and hide everything recent.
+ *
+ * Deliberately a separate query rather than part of the board read: comments are the
+ * one thing here that is per-item and unbounded, and folding them into the board would
+ * multiply a single 17-item read by every thread on it.
+ */
+const COMMENTS_QUERY = `
+query($id:ID!) {
+  node(id:$id) {
+    ... on Issue {
+      comments(last:50) {
+        totalCount
+        nodes { id body createdAt viewerDidAuthor author { login avatarUrl } }
+      }
+    }
+    ... on PullRequest {
+      comments(last:50) {
+        totalCount
+        nodes { id body createdAt viewerDidAuthor author { login avatarUrl } }
+      }
+    }
+  }
+}`;
+
+interface RawComments {
+  node: {
+    comments?: {
+      totalCount: number;
+      nodes: Array<{
+        id: string;
+        body: string;
+        createdAt: string;
+        viewerDidAuthor: boolean;
+        author: { login: string; avatarUrl: string } | null;
+      }>;
+    };
+  } | null;
+}
+
+export async function fetchComments(
+  config: ResolvedConfig,
+  issueId: string
+): Promise<{ comments: IssueComment[]; totalCount: number }> {
+  const data = await graphql<RawComments>(config.token, COMMENTS_QUERY, { id: issueId });
+  const c = data.node?.comments;
+  if (!c) return { comments: [], totalCount: 0 };
+  return {
+    comments: c.nodes.map((n) => ({
+      id: n.id,
+      body: n.body,
+      createdAt: n.createdAt,
+      viewerDidAuthor: n.viewerDidAuthor,
+      author: n.author
+    })),
+    totalCount: c.totalCount
+  };
+}
+
+const ADD_COMMENT = `
+mutation($id:ID!, $body:String!) {
+  addComment(input:{ subjectId:$id, body:$body }) {
+    commentEdge { node { id body createdAt viewerDidAuthor author { login avatarUrl } } }
+  }
+}`;
+
+interface RawAddComment {
+  addComment: {
+    commentEdge: {
+      node: {
+        id: string;
+        body: string;
+        createdAt: string;
+        viewerDidAuthor: boolean;
+        author: { login: string; avatarUrl: string } | null;
+      };
+    } | null;
+  } | null;
+}
+
+/**
+ * Post a comment, and return the comment GitHub actually created.
+ *
+ * The created node is returned rather than a bare `ok` so the caller can append the
+ * real thing — with its real id, timestamp and author — instead of a local guess. A
+ * board that renders an optimistic comment attributed to a guessed author, at a guessed
+ * time, is inventing a record of what someone said; that is the one place in this
+ * plugin where optimism is the wrong instinct.
+ *
+ * `subjectId` is the **issue's** node id, not the project item's. Passing the item id
+ * fails with "Could not resolve to a node", which reads like a broken plugin rather
+ * than like the id confusion it is — see `ItemContent.id`.
+ */
+export async function addComment(
+  config: ResolvedConfig,
+  issueId: string,
+  body: string
+): Promise<IssueComment> {
+  const data = await graphql<RawAddComment>(config.token, ADD_COMMENT, { id: issueId, body });
+  const node = data.addComment?.commentEdge?.node;
+  if (!node) throw new GitHubError('GitHub accepted the comment but returned nothing to show for it.');
+  return {
+    id: node.id,
+    body: node.body,
+    createdAt: node.createdAt,
+    viewerDidAuthor: node.viewerDidAuthor,
+    author: node.author
+  };
+}
 
 /**
  * Set — or unset — one single-select field on one item.

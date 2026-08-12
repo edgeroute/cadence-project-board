@@ -1,12 +1,15 @@
 import React from 'react';
 import type { ProjectItem, ProjectField } from './types';
 import { itemTitle, fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from './types';
+import { Comments } from './Comments';
 
 interface Props {
   item: ProjectItem;
   fields: ProjectField[];
   busy: boolean;
   error: string;
+  /** Needed by every RPC; the modal has no context of its own. */
+  projectPath: string | null;
   onSetField: (fieldName: string, optionName: string | null) => void;
   onClose: () => void;
 }
@@ -49,7 +52,7 @@ const FieldRow: React.FC<{
   </div>
 );
 
-export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, onSetField, onClose }) => {
+export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, projectPath, onSetField, onClose }) => {
   const content = item.content;
 
   // Escape closes, and the listener is on document because focus may be on any of the
@@ -111,6 +114,10 @@ export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, onSetFie
           // does not own — a large surface for a panel whose job is to set two fields.
           // The link below goes where the full, properly rendered issue lives.
           <pre className="cpb-body">{content.body.slice(0, 4000)}</pre>
+        )}
+
+        {content?.id && projectPath && (
+          <Comments issueId={content.id} knownCount={content.comments} projectPath={projectPath} />
         )}
 
         {content && (

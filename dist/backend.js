@@ -217,7 +217,7 @@ query($login:String!, $number:Int!, $cursor:String) {
           content {
             ... on DraftIssue { title }
             ... on Issue {
-              number title body state url updatedAt
+              id number title body state url updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -225,7 +225,7 @@ query($login:String!, $number:Int!, $cursor:String) {
               comments { totalCount }
             }
             ... on PullRequest {
-              number title body state url updatedAt
+              id number title body state url updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -253,6 +253,7 @@ function toContent(raw) {
   return {
     draftTitle: null,
     content: {
+      id: c.id ?? "",
       number: c.number,
       title: c.title ?? "",
       body: c.body ?? null,
@@ -328,6 +329,56 @@ mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!) {
     projectId:$projectId, itemId:$itemId, fieldId:$fieldId
   }) { projectV2Item { id } }
 }`;
+var COMMENTS_QUERY = `
+query($id:ID!) {
+  node(id:$id) {
+    ... on Issue {
+      comments(last:50) {
+        totalCount
+        nodes { id body createdAt viewerDidAuthor author { login avatarUrl } }
+      }
+    }
+    ... on PullRequest {
+      comments(last:50) {
+        totalCount
+        nodes { id body createdAt viewerDidAuthor author { login avatarUrl } }
+      }
+    }
+  }
+}`;
+async function fetchComments(config, issueId) {
+  const data = await graphql(config.token, COMMENTS_QUERY, { id: issueId });
+  const c = data.node?.comments;
+  if (!c) return { comments: [], totalCount: 0 };
+  return {
+    comments: c.nodes.map((n) => ({
+      id: n.id,
+      body: n.body,
+      createdAt: n.createdAt,
+      viewerDidAuthor: n.viewerDidAuthor,
+      author: n.author
+    })),
+    totalCount: c.totalCount
+  };
+}
+var ADD_COMMENT = `
+mutation($id:ID!, $body:String!) {
+  addComment(input:{ subjectId:$id, body:$body }) {
+    commentEdge { node { id body createdAt viewerDidAuthor author { login avatarUrl } } }
+  }
+}`;
+async function addComment(config, issueId, body) {
+  const data = await graphql(config.token, ADD_COMMENT, { id: issueId, body });
+  const node = data.addComment?.commentEdge?.node;
+  if (!node) throw new GitHubError("GitHub accepted the comment but returned nothing to show for it.");
+  return {
+    id: node.id,
+    body: node.body,
+    createdAt: node.createdAt,
+    viewerDidAuthor: node.viewerDidAuthor,
+    author: node.author
+  };
+}
 async function setSingleSelect(config, projectId, itemId, fieldId, optionId) {
   if (optionId === null) {
     await graphql(config.token, CLEAR_FIELD, { projectId, itemId, fieldId });
@@ -487,6 +538,27 @@ async function handleSetField(req, res) {
   invalidate(projectPath);
   sendJson(res, 200, { ok: true });
 }
+async function handleGetComments(req, res) {
+  const q = query(req);
+  const projectPath = q["path"] ?? "";
+  const issueId = q["issueId"] ?? "";
+  if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
+  if (!issueId) return sendJson(res, 400, { error: "issueId is required." });
+  const config = await readConfig(projectPath);
+  sendJson(res, 200, await fetchComments(config, issueId));
+}
+async function handlePostComment(req, res) {
+  const projectPath = query(req)["path"] ?? "";
+  if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
+  const body = JSON.parse(await readBody(req));
+  if (!body.issueId) return sendJson(res, 400, { error: "issueId is required." });
+  const text = (body.body ?? "").trim();
+  if (!text) return sendJson(res, 200, { error: "Write something first." });
+  const config = await readConfig(projectPath);
+  const comment = await addComment(config, body.issueId, text);
+  invalidate(projectPath);
+  sendJson(res, 200, { ok: true, comment });
+}
 var server = import_http.default.createServer((req, res) => {
   const method = req.method ?? "GET";
   const pathname = (() => {
@@ -509,6 +581,8 @@ var server = import_http.default.createServer((req, res) => {
     if (method === "POST" && pathname === "/config") return handlePostConfig(req, res);
     if (method === "GET" && pathname === "/board") return handleGetBoard(req, res);
     if (method === "POST" && pathname === "/field") return handleSetField(req, res);
+    if (method === "GET" && pathname === "/comments") return handleGetComments(req, res);
+    if (method === "POST" && pathname === "/comments") return handlePostComment(req, res);
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true });
     sendJson(res, 404, { error: `No route for ${method} ${pathname}` });
   };

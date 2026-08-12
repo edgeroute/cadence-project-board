@@ -33,8 +33,25 @@ export interface IssueActor {
   avatarUrl: string;
 }
 
+/** One comment on the issue behind an item. */
+export interface IssueComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  author: IssueActor | null;
+  /** Whether the token's own account wrote it — used to mark "you" in the thread. */
+  viewerDidAuthor: boolean;
+}
+
 /** The issue (or PR) an item points at. Null for draft items, which have no content. */
 export interface ItemContent {
+  /**
+   * The issue's own **node id** (`I_…`), which is a third id in play and not
+   * interchangeable with either of the other two: the item id (`PVTI_…`) addresses the
+   * board row, the number addresses nothing programmatically, and this addresses the
+   * issue itself. `addComment` takes this one as its `subjectId`.
+   */
+  id: string;
   number: number;
   title: string;
   body: string | null;

@@ -192,6 +192,40 @@ async function handleSetField(req: http.IncomingMessage, res: http.ServerRespons
   sendJson(res, 200, { ok: true });
 }
 
+async function handleGetComments(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const q = query(req);
+  const projectPath = q['path'] ?? '';
+  const issueId = q['issueId'] ?? '';
+  if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
+  if (!issueId) return sendJson(res, 400, { error: 'issueId is required.' });
+
+  const config = await configService.readConfig(projectPath);
+  // Uncached on purpose. A thread is the one thing on this screen that someone else is
+  // actively changing while it is open, and a 20-second-old copy of a conversation is
+  // worse than a slightly slower one.
+  sendJson(res, 200, await projectService.fetchComments(config, issueId));
+}
+
+async function handlePostComment(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const projectPath = query(req)['path'] ?? '';
+  if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
+
+  const body = JSON.parse(await readBody(req)) as { issueId?: string; body?: string };
+  if (!body.issueId) return sendJson(res, 400, { error: 'issueId is required.' });
+
+  // Trimmed and checked here rather than trusted from the form: GitHub accepts a
+  // whitespace-only comment perfectly happily, and an empty bubble in a thread is a
+  // thing nobody can explain afterwards or delete from here.
+  const text = (body.body ?? '').trim();
+  if (!text) return sendJson(res, 200, { error: 'Write something first.' });
+
+  const config = await configService.readConfig(projectPath);
+  const comment = await projectService.addComment(config, body.issueId, text);
+  // The board carries a comment count on every card, and it is now one behind.
+  cache.invalidate(projectPath);
+  sendJson(res, 200, { ok: true, comment });
+}
+
 const server = http.createServer((req, res) => {
   const method = req.method ?? 'GET';
   const pathname = (() => {
@@ -216,6 +250,8 @@ const server = http.createServer((req, res) => {
     if (method === 'POST' && pathname === '/config') return handlePostConfig(req, res);
     if (method === 'GET' && pathname === '/board') return handleGetBoard(req, res);
     if (method === 'POST' && pathname === '/field') return handleSetField(req, res);
+    if (method === 'GET' && pathname === '/comments') return handleGetComments(req, res);
+    if (method === 'POST' && pathname === '/comments') return handlePostComment(req, res);
     if (method === 'GET' && pathname === '/health') return sendJson(res, 200, { ok: true });
     sendJson(res, 404, { error: `No route for ${method} ${pathname}` });
   };

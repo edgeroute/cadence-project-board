@@ -323,6 +323,7 @@ export const App: React.FC = () => {
           fields={board.fields}
           busy={pending.has(selected.id)}
           error={error}
+          projectPath={projectPath}
           onSetField={(fieldName, optionName) => void applyField(selected.id, fieldName, optionName)}
           onClose={() => setSelectedId(null)}
         />
