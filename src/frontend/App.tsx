@@ -12,6 +12,9 @@ import {
 import { Board } from './Board';
 import { ItemModal } from './ItemModal';
 import { SettingsModal } from './SettingsModal';
+import { FilterBar, NO_FILTERS, passesFilter, type Filters } from './FilterBar';
+import { GitHubMark } from './GitHubMark';
+import { PRIORITY_FIELD, SIZE_FIELD } from './types';
 
 interface ConfigShape {
   owner: string;
@@ -30,6 +33,7 @@ export const App: React.FC = () => {
   const [error, setError] = React.useState('');
   const [notConfigured, setNotConfigured] = React.useState('');
   const [search, setSearch] = React.useState('');
+  const [filters, setFilters] = React.useState<Filters>(NO_FILTERS);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const [pending, setPending] = React.useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -241,10 +245,25 @@ export const App: React.FC = () => {
     [applyField, board]
   );
 
-  const filtered = React.useMemo(
-    () => (board ? board.items.filter((i) => itemMatches(i, search)) : []),
-    [board, search]
-  );
+  /**
+   * What the board actually draws: the search and both field filters, applied together.
+   *
+   * The columns are deliberately *not* rebuilt from this — every column still renders,
+   * empty if the filter excluded all of it. A filter that made columns disappear would
+   * change the shape of the board under the reader, and "Ready is empty" is the answer
+   * they are looking for as often as "here is what is in Ready".
+   */
+  const filtered = React.useMemo(() => {
+    if (!board) return [];
+    const priorityField = fieldByName(board.fields, PRIORITY_FIELD);
+    const sizeField = fieldByName(board.fields, SIZE_FIELD);
+    return board.items.filter(
+      (i) =>
+        itemMatches(i, search) &&
+        passesFilter(i.singleSelect, priorityField, filters.priority) &&
+        passesFilter(i.singleSelect, sizeField, filters.size)
+    );
+  }, [board, search, filters]);
 
   const selected = board?.items.find((i) => i.id === selectedId) ?? null;
   const columnCount = board ? columnsFrom(board.fields).length : 0;
@@ -274,8 +293,15 @@ export const App: React.FC = () => {
             {loading ? 'Loading…' : 'Refresh'}
           </button>
           {board && (
-            <a className="cpb-btn" href={board.url} target="_blank" rel="noreferrer noopener">
-              GitHub ↗
+            <a
+              className="cpb-btn cpb-icon-btn"
+              href={board.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="Open the project on GitHub"
+              aria-label="Open the project on GitHub"
+            >
+              <GitHubMark />
             </a>
           )}
           <button className="cpb-btn" onClick={() => void openSettings()} aria-label="Board settings">
@@ -283,6 +309,8 @@ export const App: React.FC = () => {
           </button>
         </div>
       </header>
+
+      {board && <FilterBar fields={board.fields} filters={filters} onChange={setFilters} />}
 
       {error && (
         <div className="cpb-error cpb-error--bar" role="alert">

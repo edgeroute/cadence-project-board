@@ -30,6 +30,7 @@ The token is written to `.CadenceBoard/project-board.json` in the open project, 
 | **Card** | Issue number, title, Priority, Size, up to three labels in their real colours, assignee avatars |
 | **Detail** | Click a card to set `Status`, `Priority` or `Size`, read the issue body, or open it on GitHub |
 | **Search** | Filters by issue number, title or repository |
+| **Filters** | A row under the toolbar for `Priority` and `Size`, built from the project's own options, each with a `None` entry for items where the field is unset. Columns stay on screen when a filter empties them |
 | **Columns collapse** | Remembered per project in `localStorage` |
 
 Nothing is hardcoded to one project: field and option ids are discovered from the project itself on every read, so a column added on github.com appears on the next refresh.

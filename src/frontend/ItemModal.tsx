@@ -3,6 +3,7 @@ import type { ProjectItem, ProjectField } from './types';
 import { itemTitle, fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from './types';
 import { Comments } from './Comments';
 import { RichText } from './RichText';
+import { GitHubMark } from './GitHubMark';
 
 interface Props {
   item: ProjectItem;
@@ -90,6 +91,22 @@ export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, projectP
               </div>
             )}
           </div>
+          {/* In the header rather than at the foot of the modal, where it used to be:
+              on a long thread it was below everything and had to be scrolled back to,
+              which is the same complaint the pinned header fixed for the ✕. Both ways
+              out of this card now sit in the one strip that never moves. */}
+          {content && (
+            <a
+              className="cpb-btn cpb-icon-btn"
+              href={content.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="Open on GitHub"
+              aria-label={`Open #${content.number} on GitHub`}
+            >
+              <GitHubMark />
+            </a>
+          )}
           <button className="cpb-close" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -129,12 +146,6 @@ export const ItemModal: React.FC<Props> = ({ item, fields, busy, error, projectP
 
           {content?.id && projectPath && (
             <Comments issueId={content.id} knownCount={content.comments} projectPath={projectPath} />
-          )}
-
-          {content && (
-            <a className="cpb-open-link" href={content.url} target="_blank" rel="noreferrer noopener">
-              Open on GitHub ↗
-            </a>
           )}
         </div>
       </div>

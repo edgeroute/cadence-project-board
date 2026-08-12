@@ -101,6 +101,64 @@
 .cpb-btn--primary { background: var(--cpb-accent); border-color: var(--cpb-accent); color: #fff; }
 .cpb-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }
 
+/* A square button holding one glyph. Same height as its text siblings, so a row of
+   mixed icon and label buttons still has one baseline. */
+.cpb-icon-btn {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+  color: var(--cpb-dim);
+}
+.cpb-icon-btn:hover { color: var(--cpb-text); }
+
+/* ---------- filters ---------- */
+
+/*
+ * The second toolbar row.
+ *
+ * Its own strip rather than more controls in the top row: the top row is what the
+ * board *is* (name, count) and how to act on it (search, refresh, settings), and the
+ * filters are a statement about what is currently shown. Wrapping them into one row
+ * would push the search box off a narrow window before either was crowded on its own.
+ *
+ * `flex-wrap` because the option counts come from the project — a board with eight
+ * priorities is not this plugin's business to prevent.
+ */
+.cpb-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--cpb-line);
+}
+
+.cpb-filter-group { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.cpb-filter-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--cpb-dim);
+  margin-right: 2px;
+}
+
+.cpb-filter {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--cpb-line);
+  background: transparent;
+  color: var(--cpb-dim);
+  font-size: 11px; font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cpb-filter:hover { background: var(--cpb-panel); color: var(--cpb-text); }
+.cpb-filter--on {
+  background: var(--cpb-accent-soft);
+  border-color: var(--cpb-accent);
+  color: var(--cpb-accent);
+  font-weight: 650;
+}
+.cpb-filter--clear { margin-left: auto; border-style: dashed; }
+
 /* ---------- errors ---------- */
 
 .cpb-error {
