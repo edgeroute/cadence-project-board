@@ -1,10 +1,22 @@
 import React from 'react';
 
 interface Props {
-  initial: { owner: string; projectNumber: number | null; tokenSource: 'config' | 'env' | 'none' };
+  initial: {
+    owner: string;
+    projectNumber: number | null;
+    tokenSource: 'config' | 'env' | 'none';
+    aiKeySource: 'config' | 'env' | 'none';
+    aiModel: string;
+  };
   saving: boolean;
   error: string;
-  onSave: (input: { owner: string; projectNumber: number; token?: string }) => void;
+  onSave: (input: {
+    owner: string;
+    projectNumber: number;
+    token?: string;
+    anthropicKey?: string;
+    aiModel?: string;
+  }) => void;
   onClose: () => void;
 }
 
@@ -28,6 +40,8 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
   const [owner, setOwner] = React.useState(initial.owner);
   const [number, setNumber] = React.useState(initial.projectNumber ? String(initial.projectNumber) : '');
   const [token, setToken] = React.useState('');
+  const [anthropicKey, setAnthropicKey] = React.useState('');
+  const [aiModel, setAiModel] = React.useState('');
   const [url, setUrl] = React.useState('');
   const [clipboardNote, setClipboardNote] = React.useState('');
 
@@ -239,12 +253,87 @@ export const SettingsModal: React.FC<Props> = ({ initial, saving, error, onSave,
           directory is added to <code>.gitignore</code>.
         </div>
 
+        {/*
+          AI Prioritize's own credentials.
+
+          These existed in the config file, in `publicConfig`, and in the message the
+          board shows when it falls back to keyword scoring — "Add one in Settings" —
+          for a whole release before this form had anywhere to put them. The feature
+          told readers to do something the UI gave them no way to do.
+        */}
+        <div className="cpb-section-rule" />
+
+        <label className="cpb-label" htmlFor="cpb-ai-key">
+          Anthropic API key
+          {initial.aiKeySource === 'config' && <span className="cpb-tag">saved</span>}
+          {initial.aiKeySource === 'env' && <span className="cpb-tag">from ANTHROPIC_API_KEY</span>}
+          {initial.aiKeySource === 'none' && <span className="cpb-tag cpb-tag--muted">optional</span>}
+        </label>
+        <div className="cpb-input-row">
+          <input
+            id="cpb-ai-key"
+            className="cpb-input"
+            type="password"
+            value={anthropicKey}
+            onChange={(e) => setAnthropicKey(e.target.value)}
+            // `detectUrl: false` for the same reason as the GitHub token: a secret is
+            // opaque and must never be reinterpreted as something else.
+            onPasteCapture={handlePaste(anthropicKey, setAnthropicKey, { detectUrl: false })}
+            placeholder={initial.aiKeySource === 'none' ? 'sk-ant-…' : 'leave blank to keep the current one'}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            className="cpb-btn cpb-paste"
+            onClick={() => void pasteFromClipboard(setAnthropicKey, { detectUrl: false })}
+            title="Paste from clipboard"
+          >
+            Paste
+          </button>
+        </div>
+        <div className="cpb-hint">
+          Only used by <strong>AI Prioritize</strong>. Without it that button still works — it falls
+          back to keyword scoring, which needs no key and sends nothing anywhere.
+        </div>
+        <div className="cpb-hint">
+          When it is set, the title, labels, comment count, age and the first 600 characters of each
+          issue body are sent to Anthropic. Nothing else — not your token, not the comment threads,
+          not the repository.
+        </div>
+
+        <label className="cpb-label" htmlFor="cpb-ai-model">Model</label>
+        <input
+          id="cpb-ai-model"
+          className="cpb-input"
+          value={aiModel}
+          onChange={(e) => setAiModel(e.target.value)}
+          onPasteCapture={handlePaste(aiModel, setAiModel, { detectUrl: false })}
+          placeholder={initial.aiModel}
+          spellCheck={false}
+        />
+        <div className="cpb-hint">
+          Defaults to <code>{initial.aiModel}</code>. A cheaper model will cost less and judge
+          less well; because these suggestions become writes to a shared board, that trade is
+          yours to make rather than one this plugin makes for you.
+        </div>
+
         <div className="cpb-actions">
           <button className="cpb-btn" onClick={onClose} disabled={saving}>Cancel</button>
           <button
             className="cpb-btn cpb-btn--primary"
             disabled={!valid || saving}
-            onClick={() => onSave({ owner: owner.trim(), projectNumber: parsed, token: token.trim() || undefined })}
+            onClick={() =>
+              onSave({
+                owner: owner.trim(),
+                projectNumber: parsed,
+                // Blank means "leave it alone", never "clear it" — the form is never
+                // given the current secrets back, so an empty box carries no intent.
+                // `writeConfig` keeps the stored value when these are undefined.
+                token: token.trim() || undefined,
+                anthropicKey: anthropicKey.trim() || undefined,
+                aiModel: aiModel.trim() || undefined
+              })
+            }
           >
             {saving ? 'Saving…' : 'Save'}
           </button>

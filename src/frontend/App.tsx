@@ -23,6 +23,8 @@ interface ConfigShape {
   projectNumber: number | null;
   enabled: boolean;
   tokenSource: 'config' | 'env' | 'none';
+  aiKeySource: 'config' | 'env' | 'none';
+  aiModel: string;
 }
 
 export const App: React.FC = () => {
@@ -132,12 +134,18 @@ export const App: React.FC = () => {
       const cfg = (await api.rpc('GET', `/config?path=${encodeURIComponent(projectPath)}`)) as ConfigShape;
       setSettings(cfg);
     } catch (e) {
-      setSettings({ owner: '', projectNumber: null, enabled: true, tokenSource: 'none' });
+      setSettings({ owner: '', projectNumber: null, enabled: true, tokenSource: 'none', aiKeySource: 'none', aiModel: 'claude-opus-5' });
       setSettingsError((e as Error).message);
     }
   };
 
-  const saveSettings = async (input: { owner: string; projectNumber: number; token?: string }) => {
+  const saveSettings = async (input: {
+    owner: string;
+    projectNumber: number;
+    token?: string;
+    anthropicKey?: string;
+    aiModel?: string;
+  }) => {
     if (!projectPath) return;
     setSavingSettings(true);
     setSettingsError('');

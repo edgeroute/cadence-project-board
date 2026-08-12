@@ -1,6 +1,6 @@
 {
   "name": "cadence-project-board",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "GitHub Projects v2 kanban board plugin for claudecodeui",
   "author": "edgeroute",
   "license": "MIT",

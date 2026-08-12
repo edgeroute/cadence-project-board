@@ -716,3 +716,13 @@
 .cpb-delta-from { color: var(--cpb-dim); text-decoration: line-through; }
 .cpb-delta-arrow { color: var(--cpb-dim); }
 .cpb-delta-to { color: var(--cpb-accent); font-weight: 650; }
+
+/* A divider between the GitHub half of Settings and the AI half — two different
+   credentials with two different blast radii, and the form should not read as one
+   undifferentiated list of secrets. */
+.cpb-section-rule {
+  height: 1px;
+  background: var(--cpb-line);
+  margin: 6px 0 2px;
+}
+.cpb-tag--muted { background: var(--cpb-panel-2); color: var(--cpb-dim); }
