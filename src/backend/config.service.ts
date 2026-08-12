@@ -1,4 +1,5 @@
 import path from 'path';
+import { DEFAULT_MODEL } from './ai.service';
 import { promises as fs } from 'fs';
 
 const CONFIG_DIR = '.CadenceBoard';
@@ -9,6 +10,14 @@ export interface BoardConfigFile {
   owner: string;
   projectNumber: number;
   enabled?: boolean;
+  /** Optional — enables the AI half of Prioritize. Without it the heuristic answers. */
+  anthropicKey?: string;
+  /**
+   * Which model Prioritize asks. Defaults to the current flagship rather than the
+   * cheapest that would work: these suggestions become writes to a shared board, so
+   * trading capability for cost is the reader's call to make, not this plugin's.
+   */
+  aiModel?: string;
 }
 
 export interface ResolvedConfig {
@@ -17,6 +26,9 @@ export interface ResolvedConfig {
   projectNumber: number;
   enabled: boolean;
   tokenSource: 'config' | 'env';
+  /** From the config file, or `ANTHROPIC_API_KEY` in the backend's own environment. */
+  anthropicKey?: string;
+  aiModel: string;
 }
 
 export class NotConfiguredError extends Error {
@@ -69,7 +81,12 @@ export async function readConfig(projectPath: string): Promise<ResolvedConfig> {
     owner: parsed.owner,
     projectNumber: Number(parsed.projectNumber),
     enabled: parsed.enabled !== false,
-    tokenSource: fileToken ? 'config' : 'env'
+    tokenSource: fileToken ? 'config' : 'env',
+    // Same fallback shape as the GitHub token: the file wins, the environment answers
+    // when the file is silent. The Anthropic SDK would read this variable itself, but
+    // reading it here keeps "is the AI half available?" answerable in one place.
+    anthropicKey: parsed.anthropicKey?.trim() || process.env.ANTHROPIC_API_KEY || undefined,
+    aiModel: parsed.aiModel?.trim() || DEFAULT_MODEL
   };
 }
 
@@ -79,6 +96,8 @@ export async function publicConfig(projectPath: string): Promise<{
   projectNumber: number | null;
   enabled: boolean;
   tokenSource: 'config' | 'env' | 'none';
+  aiKeySource: 'config' | 'env' | 'none';
+  aiModel: string;
 }> {
   let parsed: BoardConfigFile | null = null;
   try {
@@ -88,11 +107,16 @@ export async function publicConfig(projectPath: string): Promise<{
     parsed = null;
   }
   const tokenSource = parsed?.token?.trim() ? 'config' : envToken() ? 'env' : 'none';
+  const aiKeySource = parsed?.anthropicKey?.trim() ? 'config' : process.env.ANTHROPIC_API_KEY ? 'env' : 'none';
   return {
     owner: parsed?.owner ?? '',
     projectNumber: parsed?.projectNumber ?? null,
     enabled: parsed?.enabled !== false,
-    tokenSource
+    tokenSource,
+    // Presence only. The key itself never crosses the RPC boundary, exactly as the
+    // GitHub token does not.
+    aiKeySource,
+    aiModel: parsed?.aiModel?.trim() || DEFAULT_MODEL
   };
 }
 
@@ -161,12 +185,16 @@ export async function writeConfig(
   }
 
   const token = input.token?.trim() || existing?.token || undefined;
+  const anthropicKey = input.anthropicKey?.trim() || existing?.anthropicKey || undefined;
+  const aiModel = input.aiModel?.trim() || existing?.aiModel || undefined;
   const body: BoardConfigFile = {
     owner: input.owner.trim(),
     projectNumber: Number(input.projectNumber),
     enabled: input.enabled !== false
   };
   if (token) body.token = token;
+  if (anthropicKey) body.anthropicKey = anthropicKey;
+  if (aiModel) body.aiModel = aiModel;
 
   const gitignored = await ensureGitignored(projectPath);
   await fs.writeFile(path.join(projectPath, CONFIG_FILE), JSON.stringify(body, null, 2) + '\n', {

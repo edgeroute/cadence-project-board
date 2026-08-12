@@ -1,6 +1,6 @@
 import React from 'react';
 import { usePluginAPI, useProjectPath, useTheme } from './PluginContext';
-import type { BoardData, ProjectItem, BoardResponse } from './types';
+import type { BoardData, ProjectItem, BoardResponse, ProjectField } from './types';
 import {
   isNotConfigured,
   itemMatches,
@@ -14,6 +14,8 @@ import { ItemModal } from './ItemModal';
 import { SettingsModal } from './SettingsModal';
 import { FilterBar, NO_FILTERS, passesFilter, type Filters } from './FilterBar';
 import { GitHubMark } from './GitHubMark';
+import { SORT_LABELS, DEFAULT_SORT, availableSortKeys, sortItems, type Sort, type SortKey } from './sortUtils';
+import { SuggestionsPanel, type PrioritizeResult } from './SuggestionsPanel';
 import { PRIORITY_FIELD, SIZE_FIELD } from './types';
 
 interface ConfigShape {
@@ -34,6 +36,12 @@ export const App: React.FC = () => {
   const [notConfigured, setNotConfigured] = React.useState('');
   const [search, setSearch] = React.useState('');
   const [filters, setFilters] = React.useState<Filters>(NO_FILTERS);
+  const [sort, setSort] = React.useState<Sort>(DEFAULT_SORT);
+  const [prioritizing, setPrioritizing] = React.useState(false);
+  const [suggestions, setSuggestions] = React.useState<PrioritizeResult | null>(null);
+  const [picked, setPicked] = React.useState<Set<string>>(new Set());
+  const [applying, setApplying] = React.useState(false);
+  const [appliedCount, setAppliedCount] = React.useState(0);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const [pending, setPending] = React.useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -210,11 +218,16 @@ export const App: React.FC = () => {
           itemId,
           field: fieldName,
           option: optionName
-        })) as { ok?: boolean; error?: string };
+        })) as { ok?: boolean; error?: string; warning?: string };
 
         if (!res.ok) {
           patch(previous);
           setError(res.error || `Could not update ${fieldName}.`);
+        } else if (res.warning) {
+          // The field write landed; only the label mirror failed. The card stays where
+          // the reader put it and the message explains what is out of step, rather than
+          // rolling back a change that actually happened.
+          setError(res.warning);
         }
       } catch (e) {
         patch(previous);
@@ -265,6 +278,94 @@ export const App: React.FC = () => {
     );
   }, [board, search, filters]);
 
+  const sorted = React.useMemo(
+    () => (board ? sortItems(filtered, sort, board.fields) : filtered),
+    [board, filtered, sort]
+  );
+
+  /**
+   * Ask for suggestions for what is currently on screen.
+   *
+   * The *sorted and filtered* set, not the whole board: triaging "everything in Backlog"
+   * should cost a Backlog-sized request, and a reader who has filtered the view has
+   * already said which items they mean.
+   */
+  const prioritize = React.useCallback(async () => {
+    if (!projectPath || !board) return;
+    setPrioritizing(true);
+    setError('');
+    try {
+      const res = (await api.rpc('POST', `/prioritize?path=${encodeURIComponent(projectPath)}`, {
+        itemIds: sorted.map((i) => i.id)
+      })) as PrioritizeResult & { error?: string };
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setSuggestions(res);
+      // Pre-ticked: every row that would actually change something. The panel hides
+      // no-op rows, so this matches what the reader is shown.
+      const priorityField = fieldByName(board.fields, PRIORITY_FIELD);
+      const sizeField = fieldByName(board.fields, SIZE_FIELD);
+      const nameOf = (item: ProjectItem, f: ProjectField | null) =>
+        f ? f.options.find((o) => o.id === item.singleSelect[f.id])?.name ?? null : null;
+      const changed = new Set<string>();
+      for (const s of res.suggestions) {
+        const item = board.items.find((i) => i.id === s.itemId);
+        if (!item) continue;
+        if (nameOf(item, priorityField) !== s.priority || nameOf(item, sizeField) !== s.size) {
+          changed.add(s.itemId);
+        }
+      }
+      setPicked(changed);
+    } catch (e) {
+      setError((e as Error).message || 'Could not get suggestions.');
+    } finally {
+      setPrioritizing(false);
+    }
+  }, [api, board, projectPath, sorted]);
+
+  /**
+   * Write the ticked suggestions.
+   *
+   * Sequentially, through the same `applyField` a drag uses — so each write gets the
+   * optimistic patch, the rollback, and the label mirror for free, and a failure part
+   * way through leaves the earlier writes standing rather than half-applying something
+   * that claims to be atomic. GitHub has no batch mutation for this, so a parallel fan
+   * out would only trade a progress count for rate-limit risk.
+   */
+  const applySuggestions = React.useCallback(async () => {
+    if (!suggestions) return;
+    setApplying(true);
+    setAppliedCount(0);
+    let done = 0;
+    for (const s of suggestions.suggestions) {
+      if (!picked.has(s.itemId)) continue;
+      if (s.priority) await applyField(s.itemId, PRIORITY_FIELD, s.priority);
+      if (s.size) await applyField(s.itemId, SIZE_FIELD, s.size);
+      done += 1;
+      setAppliedCount(done);
+    }
+    setApplying(false);
+    setSuggestions(null);
+    setPicked(new Set());
+  }, [applyField, picked, suggestions]);
+
+  /** What the board holds now, for the panel's old → new column. */
+  const currentValues = React.useMemo(() => {
+    const map = new Map<string, { priority: string | null; size: string | null }>();
+    if (!board) return map;
+    const p = fieldByName(board.fields, PRIORITY_FIELD);
+    const z = fieldByName(board.fields, SIZE_FIELD);
+    for (const item of board.items) {
+      map.set(item.id, {
+        priority: p ? p.options.find((o) => o.id === item.singleSelect[p.id])?.name ?? null : null,
+        size: z ? z.options.find((o) => o.id === item.singleSelect[z.id])?.name ?? null : null
+      });
+    }
+    return map;
+  }, [board]);
+
   const selected = board?.items.find((i) => i.id === selectedId) ?? null;
   const columnCount = board ? columnsFrom(board.fields).length : 0;
 
@@ -289,6 +390,44 @@ export const App: React.FC = () => {
             placeholder="Search number, title, repo…"
             aria-label="Search the board"
           />
+          {board && (
+            <>
+              <select
+                className="cpb-select"
+                value={sort.key}
+                onChange={(e) => setSort({ ...sort, key: e.target.value as SortKey })}
+                aria-label="Sort cards by"
+                title="Sort cards within each column"
+              >
+                {availableSortKeys(board.fields).map((k) => (
+                  <option key={k} value={k}>
+                    {SORT_LABELS[k]}
+                  </option>
+                ))}
+              </select>
+              {/* Hidden on Board order: there is no ascending or descending version of
+                  "however the owner arranged it", and a live control that does nothing
+                  is worse than an absent one. */}
+              {sort.key !== 'manual' && (
+                <button
+                  className="cpb-btn cpb-icon-btn"
+                  onClick={() => setSort({ ...sort, dir: sort.dir === 'desc' ? 'asc' : 'desc' })}
+                  title={sort.dir === 'desc' ? 'Descending — click for ascending' : 'Ascending — click for descending'}
+                  aria-label={`Sort direction: ${sort.dir === 'desc' ? 'descending' : 'ascending'}`}
+                >
+                  {sort.dir === 'desc' ? '↓' : '↑'}
+                </button>
+              )}
+              <button
+                className="cpb-btn"
+                onClick={() => void prioritize()}
+                disabled={prioritizing}
+                title="Suggest a Priority and Size for the cards currently shown"
+              >
+                {prioritizing ? 'Reading…' : 'AI Prioritize'}
+              </button>
+            </>
+          )}
           <button className="cpb-btn" onClick={() => void load(true)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
@@ -336,7 +475,7 @@ export const App: React.FC = () => {
       ) : board ? (
         <Board
           board={board}
-          items={filtered}
+          items={sorted}
           collapsed={collapsed}
           pending={pending}
           onToggleColumn={toggleColumn}
@@ -354,6 +493,43 @@ export const App: React.FC = () => {
           projectPath={projectPath}
           onSetField={(fieldName, optionName) => void applyField(selected.id, fieldName, optionName)}
           onClose={() => setSelectedId(null)}
+        />
+      )}
+
+      {suggestions && (
+        <SuggestionsPanel
+          result={suggestions}
+          current={currentValues}
+          selected={picked}
+          applying={applying}
+          applied={appliedCount}
+          onToggle={(id) =>
+            setPicked((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onToggleAll={(on) =>
+            setPicked(
+              on
+                ? new Set(
+                    suggestions.suggestions
+                      .filter((s) => {
+                        const now = currentValues.get(s.itemId);
+                        return !now || now.priority !== s.priority || now.size !== s.size;
+                      })
+                      .map((s) => s.itemId)
+                  )
+                : new Set()
+            )
+          }
+          onApply={() => void applySuggestions()}
+          onClose={() => {
+            setSuggestions(null);
+            setPicked(new Set());
+          }}
         />
       )}
 

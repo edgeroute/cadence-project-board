@@ -651,3 +651,68 @@
   .cpb-search { width: 130px; }
   .cpb-bar { gap: 8px; }
 }
+
+/* ---------- sort control ---------- */
+
+.cpb-select {
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--cpb-line);
+  background: var(--cpb-panel);
+  color: var(--cpb-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.cpb-select:focus { outline: 2px solid var(--cpb-accent); outline-offset: -1px; }
+
+/* ---------- suggestions panel ---------- */
+
+/*
+ * The footer is outside `.cpb-modal-scroll`, so Apply stays reachable however long the
+ * list is — the same split the header already uses, and for the same reason: a control
+ * you have to scroll to find is a control that looks missing.
+ */
+.cpb-modal-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  border-top: 1px solid var(--cpb-line);
+}
+.cpb-modal-foot .cpb-actions { margin-top: 0; }
+
+.cpb-suggest-all {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--cpb-dim); cursor: pointer;
+}
+
+.cpb-suggest-list { display: flex; flex-direction: column; gap: 6px; }
+
+.cpb-suggest {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--cpb-line);
+  border-radius: 8px;
+  background: var(--cpb-panel);
+  cursor: pointer;
+}
+.cpb-suggest:hover { border-color: var(--cpb-accent); }
+.cpb-suggest input { margin-top: 2px; flex-shrink: 0; }
+.cpb-suggest-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cpb-suggest-title { font-size: 12.5px; line-height: 1.4; }
+.cpb-suggest-change { display: flex; flex-wrap: wrap; gap: 10px; }
+.cpb-suggest-reason { font-size: 11px; color: var(--cpb-dim); line-height: 1.45; }
+
+.cpb-delta { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
+.cpb-delta-label {
+  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--cpb-dim); font-size: 9.5px;
+}
+.cpb-delta-from { color: var(--cpb-dim); text-decoration: line-through; }
+.cpb-delta-arrow { color: var(--cpb-dim); }
+.cpb-delta-to { color: var(--cpb-accent); font-weight: 650; }

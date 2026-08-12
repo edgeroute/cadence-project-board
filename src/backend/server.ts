@@ -7,6 +7,8 @@ import { NotConfiguredError } from './config.service';
 import * as projectService from './project.service';
 import { GitHubError } from './project.service';
 import * as cache from './cache';
+import * as labelService from './label.service';
+import * as aiService from './ai.service';
 import { fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from '../frontend/types';
 
 /**
@@ -189,7 +191,68 @@ async function handleSetField(req: http.IncomingMessage, res: http.ServerRespons
 
   await projectService.setSingleSelect(config, board.projectId, body.itemId, field.id, optionId);
   cache.invalidate(projectPath);
-  sendJson(res, 200, { ok: true });
+
+  /*
+    Mirror the value onto the issue as a label — see `label.service`.
+
+    **Status is deliberately not mirrored.** Status is the board's own axis: it is what
+    the columns *are*, every item has one, and a `status:Backlog` label on every issue in
+    the repository would be noise rather than information. Priority and Size are the two
+    that a reader wants to find from the issue list, and the two that are usually unset.
+
+    **A mirror failure does not fail the request.** The field write above already
+    succeeded and is the source of truth; answering with an error would tell the reader
+    their change did not happen and invite them to repeat a write that did. It comes back
+    as a warning beside `ok: true` instead, so the board updates and the reader still
+    learns the label is out of step.
+  */
+  let warning: string | undefined;
+  if (fieldName !== STATUS_FIELD) {
+    const item = board.items.find((i) => i.id === body.itemId);
+    const content = item?.content;
+    if (content?.number && content.repository) {
+      const optionName = optionId ? field.options.find((o) => o.id === optionId)?.name ?? null : null;
+      try {
+        await labelService.mirrorFieldToLabels(
+          config,
+          content.repository,
+          content.number,
+          field.name,
+          optionName,
+          field.options.map((o) => o.name)
+        );
+      } catch (e) {
+        warning = `Saved, but the matching label could not be updated: ${(e as Error).message}`;
+      }
+    }
+  }
+
+  sendJson(res, 200, warning ? { ok: true, warning } : { ok: true });
+}
+
+/**
+ * Suggest a Priority and a Size for everything on the board.
+ *
+ * Suggests only — nothing here writes. The reader reviews the list and applies what they
+ * accept through `/field`, one item at a time, which is also what keeps the label mirror
+ * and the optimistic UI on a single path. See `ai.service`.
+ */
+async function handlePrioritize(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const projectPath = query(req)['path'] ?? '';
+  if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
+
+  const config = await configService.readConfig(projectPath);
+  const board = await projectService.fetchBoard(config);
+  cache.set(projectPath, board);
+
+  // Only what the reader is looking at. The frontend posts the filtered, searched set of
+  // item ids, so triaging "everything in Backlog" costs one Backlog-sized request rather
+  // than sending the whole board and discarding most of the answer.
+  const body = JSON.parse((await readBody(req)) || '{}') as { itemIds?: string[] };
+  const wanted = new Set(body.itemIds ?? []);
+  const items = wanted.size ? board.items.filter((i) => wanted.has(i.id)) : board.items;
+
+  sendJson(res, 200, await aiService.prioritize(board, items, config.anthropicKey ?? null, config.aiModel));
 }
 
 async function handleGetComments(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -252,6 +315,7 @@ const server = http.createServer((req, res) => {
     if (method === 'POST' && pathname === '/field') return handleSetField(req, res);
     if (method === 'GET' && pathname === '/comments') return handleGetComments(req, res);
     if (method === 'POST' && pathname === '/comments') return handlePostComment(req, res);
+    if (method === 'POST' && pathname === '/prioritize') return handlePrioritize(req, res);
     if (method === 'GET' && pathname === '/health') return sendJson(res, 200, { ok: true });
     sendJson(res, 404, { error: `No route for ${method} ${pathname}` });
   };

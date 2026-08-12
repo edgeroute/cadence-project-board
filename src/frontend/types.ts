@@ -57,6 +57,7 @@ export interface ItemContent {
   body: string | null;
   state: string;
   url: string;
+  createdAt: string;
   updatedAt: string;
   repository: string;
   author: IssueActor | null;

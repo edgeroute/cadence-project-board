@@ -127,7 +127,7 @@ query($login:String!, $number:Int!, $cursor:String) {
           content {
             ... on DraftIssue { title }
             ... on Issue {
-              id number title body state url updatedAt
+              id number title body state url createdAt updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -135,7 +135,7 @@ query($login:String!, $number:Int!, $cursor:String) {
               comments { totalCount }
             }
             ... on PullRequest {
-              id number title body state url updatedAt
+              id number title body state url createdAt updatedAt
               repository { nameWithOwner }
               author { login avatarUrl }
               labels(first:10) { nodes { name color } }
@@ -163,6 +163,7 @@ interface RawItem {
   content: {
     id?: string;
     number?: number;
+    createdAt?: string;
     title?: string;
     body?: string | null;
     state?: string;
@@ -211,6 +212,7 @@ function toContent(raw: RawItem): { content: ItemContent | null; draftTitle: str
       body: c.body ?? null,
       state: c.state ?? 'OPEN',
       url: c.url ?? '',
+      createdAt: c.createdAt ?? '',
       updatedAt: c.updatedAt ?? '',
       repository: c.repository?.nameWithOwner ?? '',
       author: c.author ?? null,

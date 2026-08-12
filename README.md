@@ -21,6 +21,14 @@ Fine-grained tokens cannot read user-owned projects at all. GitHub exposes a `Pr
 
 The token is written to `.CadenceBoard/project-board.json` in the open project, and that directory is added to the project's `.gitignore` on first save. `$GH_TOKEN` (or `$GITHUB_TOKEN`) is used as a fallback when the file has no token, so a machine with a working credential needs no second copy.
 
+## Where Priority and Size live
+
+The **project field is the source of truth**, and a matching label is mirrored onto the issue.
+
+Projects v2 field values are reachable from an issue and GitHub shows them in the issue sidebar, but they are **not searchable** — there is no `is:issue priority:P0`. A label is, so setting `Priority` to `P0` also puts `priority:P0` on the issue: it shows in the issue list, it can be searched, and it survives the item being removed from the project.
+
+The mirror is one-directional. Nothing here ever reads a label back to decide a field's value, so there is one source of truth rather than two that can drift — on any disagreement the field wins and the next write re-syncs the label. Labels are namespaced by field name (`priority:`, `size:`) so setting a value can safely remove the sibling options' labels without touching anything else you have called `M`. `Status` is deliberately not mirrored: it is what the columns *are*, and a `status:Backlog` label on every issue would be noise.
+
 ## What it does
 
 | | |
@@ -31,6 +39,9 @@ The token is written to `.CadenceBoard/project-board.json` in the open project, 
 | **Detail** | Click a card to set `Status`, `Priority` or `Size`, read the issue body, or open it on GitHub |
 | **Search** | Filters by issue number, title or repository |
 | **Filters** | A row under the toolbar for `Priority` and `Size`, built from the project's own options, each with a `None` entry for items where the field is unset. Columns stay on screen when a filter empties them |
+| **Sort** | Orders cards within each column — number, updated, created, comments, title, or by `Priority`/`Size` using the project's own option order. Defaults to the board's own arrangement |
+| **AI Prioritize** | Suggests a `Priority` and a `Size` for the cards currently shown, then lets you review and apply them. Falls back to keyword scoring with no API key |
+| **Label mirror** | Setting `Priority` or `Size` also writes a matching `priority:P0` / `size:M` label on the issue, so the value is searchable from the issue list |
 | **Columns collapse** | Remembered per project in `localStorage` |
 
 Nothing is hardcoded to one project: field and option ids are discovered from the project itself on every read, so a column added on github.com appears on the next refresh.
