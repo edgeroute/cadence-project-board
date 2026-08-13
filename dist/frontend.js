@@ -8121,6 +8121,13 @@ function agoLabel(since, now) {
   const hours = Math.round(minutes / 60);
   return `${hours}h ago`;
 }
+const HOLD_MS = 6e4;
+function mergeHeld(board, held, now) {
+  if (!held) return { board, settled: false };
+  if (board.items.some((i) => i.id === held.item.id)) return { board, settled: true };
+  if (now - held.at > HOLD_MS) return { board, settled: true };
+  return { board: { ...board, items: [held.item, ...board.items] }, settled: false };
+}
 const App = () => {
   const api = usePluginAPI();
   const projectPath = useProjectPath();
@@ -8149,6 +8156,7 @@ const App = () => {
   const [loadedAt, setLoadedAt] = React.useState(null);
   const [now, setNow] = React.useState(() => Date.now());
   const [dragging, setDragging] = React.useState(false);
+  const heldRef = React.useRef(null);
   const collapseKey = projectPath ? `cpb:collapsed:${projectPath}` : null;
   React.useEffect(() => {
     if (!collapseKey) return;
@@ -8196,7 +8204,9 @@ const App = () => {
         } else if (res.error) {
           setError(res.error);
         } else {
-          setBoard(res);
+          const merged = mergeHeld(res, heldRef.current, Date.now());
+          if (merged.settled) heldRef.current = null;
+          setBoard(merged.board);
           setLoadedAt(res.fetchedAt ?? Date.now());
         }
       } catch (e) {
@@ -8445,14 +8455,17 @@ const App = () => {
       setCreateError("");
       try {
         const res = await api.rpc("POST", `/issues?path=${encodeURIComponent(projectPath)}`, input);
-        if (res.error || !res.ok || !res.issue) {
+        if (res.error || !res.ok || !res.issue || !res.item) {
           setCreateError(res.error || "Could not open the issue.");
           return;
         }
         setNewIssue(false);
-        setError(res.warning ?? "");
         setNotice({ text: `Opened #${res.issue.number} — ${res.issue.title}`, url: res.issue.url });
+        const held = { item: res.item, at: Date.now() };
+        heldRef.current = held;
+        setBoard((b) => b ? mergeHeld(b, held, Date.now()).board : b);
         await load(true);
+        if (res.warning) setError(res.warning);
       } catch (e) {
         setCreateError(e.message || "Could not open the issue.");
       } finally {

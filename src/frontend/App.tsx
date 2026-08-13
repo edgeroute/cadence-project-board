@@ -18,6 +18,7 @@ import { SORT_LABELS, DEFAULT_SORT, availableSortKeys, sortItems, type Sort, typ
 import { SuggestionsPanel, type PrioritizeResult } from './SuggestionsPanel';
 import { NewIssueModal, type NewIssueInput } from './NewIssueModal';
 import { agoLabel, canRefresh, REFRESH_INTERVAL_MS } from './refreshPolicy';
+import { mergeHeld, type HeldItem } from './pendingInsert';
 import { PRIORITY_FIELD, SIZE_FIELD } from './types';
 
 interface ConfigShape {
@@ -68,6 +69,13 @@ export const App: React.FC = () => {
   const [loadedAt, setLoadedAt] = React.useState<number | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
   const [dragging, setDragging] = React.useState(false);
+  /**
+   * A card filed seconds ago that GitHub has not yet admitted into the project's `items`
+   * connection — see `pendingInsert`. A ref rather than state: it is consulted inside
+   * `load`, and as state it would have to be a dependency of it, which would rebuild the
+   * fetch callback and restart the refresh timer every time an issue was created.
+   */
+  const heldRef = React.useRef<HeldItem | null>(null);
 
   /**
    * Collapsed columns, remembered per project.
@@ -142,7 +150,12 @@ export const App: React.FC = () => {
           // Cadence app fixed in its own `/me` gate.
           setError(res.error);
         } else {
-          setBoard(res);
+          // A just-created card rides along until the server's own copy carries it. Every
+          // read goes through here — the manual Refresh, the 30-second poll, the refetch the
+          // create itself fires — so there is one place where a held card can be dropped.
+          const merged = mergeHeld(res, heldRef.current, Date.now());
+          if (merged.settled) heldRef.current = null;
+          setBoard(merged.board);
           // The server's stamp, not this moment: a response served from the 20-second cache
           // is a fresh delivery of an older board. See `BoardData.fetchedAt`.
           setLoadedAt(res.fetchedAt ?? Date.now());
@@ -557,18 +570,37 @@ export const App: React.FC = () => {
           ok?: boolean;
           error?: string;
           warning?: string;
+          item?: ProjectItem;
           issue?: { number: number; url: string; title: string };
         };
-        if (res.error || !res.ok || !res.issue) {
+        if (res.error || !res.ok || !res.issue || !res.item) {
           setCreateError(res.error || 'Could not open the issue.');
           return;
         }
         setNewIssue(false);
-        setError(res.warning ?? '');
         setNotice({ text: `Opened #${res.issue.number} — ${res.issue.title}`, url: res.issue.url });
-        // `fresh`: the server dropped its cache on the write, and a cached board here would
-        // be one that does not contain the card the reader just watched themselves file.
+
+        /*
+          Put the card on the board now, from the server's answer, and go on holding it until
+          a read comes back carrying it.
+
+          Projects v2 does not list a just-added item for two to three seconds, so the
+          refetch below reads a board without it — which is how an issue that filed perfectly
+          appeared to vanish. See `pendingInsert`. Nothing here is invented: every field came
+          from GitHub's own reply to the mutation, or from the Status write it confirmed.
+        */
+        const held: HeldItem = { item: res.item, at: Date.now() };
+        heldRef.current = held;
+        setBoard((b) => (b ? mergeHeld(b, held, Date.now()).board : b));
+
+        // `fresh`, and *after* the local insert rather than instead of it: the server dropped
+        // its cache on the write, so this is the read that will eventually carry the real
+        // card and retire the held one.
         await load(true);
+        // Set last, because a non-quiet `load` clears `error` on its way in — reporting the
+        // Status warning before it would have wiped the one message explaining why the card
+        // is not in the column the reader picked.
+        if (res.warning) setError(res.warning);
       } catch (e) {
         setCreateError((e as Error).message || 'Could not open the issue.');
       } finally {

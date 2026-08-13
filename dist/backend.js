@@ -13256,7 +13256,11 @@ query($owner:String!, $name:String!) {
 var CREATE_ISSUE = `
 mutation($repositoryId:ID!, $title:String!, $body:String) {
   createIssue(input:{ repositoryId:$repositoryId, title:$title, body:$body }) {
-    issue { id number url title }
+    issue {
+      id number url title body state createdAt updatedAt
+      repository { nameWithOwner }
+      author { login avatarUrl }
+    }
   }
 }`;
 var ADD_TO_PROJECT = `
@@ -13289,7 +13293,28 @@ async function createIssue(config, projectId, repository, title, body) {
   if (!itemId) {
     throw new GitHubError(`Opened #${issue.number}, but it could not be added to the board. It is on github.com.`);
   }
-  return { itemId, issueId: issue.id, number: issue.number, url: issue.url, title: issue.title };
+  return {
+    itemId,
+    content: {
+      id: issue.id,
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      state: issue.state,
+      url: issue.url,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      repository: issue.repository?.nameWithOwner ?? repository,
+      author: issue.author,
+      // Empty because they are empty, not because they are unknown: nothing can have been
+      // labelled, assigned or commented on in the moment between creating it and reading
+      // this response.
+      labels: [],
+      assignees: [],
+      comments: 0,
+      isPullRequest: false
+    }
+  };
 }
 var MUTATION_CHUNK = 20;
 async function setManySingleSelect(config, projectId, writes) {
@@ -13693,23 +13718,26 @@ async function handleCreateIssue(req, res) {
   );
   invalidate(projectPath);
   let warning;
+  const singleSelect = {};
   const wanted = (body.status ?? "").trim();
   if (wanted) {
     const status = fieldByName(board.fields, STATUS_FIELD);
     const option = status?.options.find((o) => o.name.toLowerCase() === wanted.toLowerCase());
     if (!status || !option) {
-      warning = `Opened #${created.number}, but there is no "${wanted}" column to put it in.`;
+      warning = `Opened #${created.content.number}, but there is no "${wanted}" column to put it in.`;
     } else {
       try {
         await setManySingleSelect(config, board.projectId, [
           { itemId: created.itemId, fieldId: status.id, optionId: option.id }
         ]);
+        singleSelect[status.id] = option.id;
       } catch (e) {
-        warning = `Opened #${created.number}, but it could not be moved to ${option.name} \u2014 ${e.message}`;
+        warning = `Opened #${created.content.number}, but it could not be moved to ${option.name} \u2014 ${e.message}`;
       }
     }
   }
-  sendJson(res, 200, { ok: true, issue: created, warning });
+  const item = { id: created.itemId, content: created.content, draftTitle: null, singleSelect };
+  sendJson(res, 200, { ok: true, item, issue: created.content, warning });
 }
 var server = import_http.default.createServer((req, res) => {
   const method = req.method ?? "GET";

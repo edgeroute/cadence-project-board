@@ -10,7 +10,7 @@ import * as cache from './cache';
 import * as labelService from './label.service';
 import * as aiService from './ai.service';
 import { fieldByName, STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD } from '../frontend/types';
-import type { ProjectField } from '../frontend/types';
+import type { ProjectField, ProjectItem } from '../frontend/types';
 
 /**
  * Copy the companion skill into the reader's Claude Code skills directory.
@@ -471,24 +471,44 @@ async function handleCreateIssue(req: http.IncomingMessage, res: http.ServerResp
   cache.invalidate(projectPath);
 
   let warning: string | undefined;
+  const singleSelect: Record<string, string> = {};
   const wanted = (body.status ?? '').trim();
   if (wanted) {
     const status = fieldByName(board.fields, STATUS_FIELD);
     const option = status?.options.find((o) => o.name.toLowerCase() === wanted.toLowerCase());
     if (!status || !option) {
-      warning = `Opened #${created.number}, but there is no "${wanted}" column to put it in.`;
+      warning = `Opened #${created.content.number}, but there is no "${wanted}" column to put it in.`;
     } else {
       try {
         await projectService.setManySingleSelect(config, board.projectId, [
           { itemId: created.itemId, fieldId: status.id, optionId: option.id }
         ]);
+        // Recorded only on the write that succeeded, so the card the frontend draws sits in
+        // the column it is actually in rather than the one that was asked for.
+        singleSelect[status.id] = option.id;
       } catch (e) {
-        warning = `Opened #${created.number}, but it could not be moved to ${option.name} — ${(e as Error).message}`;
+        warning = `Opened #${created.content.number}, but it could not be moved to ${option.name} — ${(e as Error).message}`;
       }
     }
   }
 
-  sendJson(res, 200, { ok: true, issue: created, warning });
+  /*
+    The finished card, sent back rather than left for the caller to find on the next read.
+
+    Projects v2 is eventually consistent on this path: `addProjectV2ItemById` returns the
+    item's id, and the project's `items` connection then does not include it for two to
+    three seconds — measured repeatedly against the live board, at +1.3s, +2.4s and +3.5s,
+    absent, absent, present. The frontend refetches immediately, so it was reading a board
+    that genuinely did not contain the card yet and drawing exactly what it was given: the
+    column the reader had just filed into, without their issue in it.
+
+    Every field here comes from GitHub's own answer to the mutation or from the write that
+    was just confirmed. Nothing is guessed, which is what distinguishes this from the
+    optimistic card the create path deliberately does not draw.
+  */
+  const item: ProjectItem = { id: created.itemId, content: created.content, draftTitle: null, singleSelect };
+
+  sendJson(res, 200, { ok: true, item, issue: created.content, warning });
 }
 
 const server = http.createServer((req, res) => {

@@ -485,10 +485,29 @@ query($owner:String!, $name:String!) {
   repository(owner:$owner, name:$name) { id nameWithOwner hasIssuesEnabled }
 }`;
 
+/*
+  Everything a card needs, asked for in the mutation that creates the issue.
+
+  This used to select `id number url title` — the four fields needed to *report* the create
+  — and the board was then refetched to draw it. That refetch is a race GitHub wins: the
+  project's `items` connection does not include a just-added item for two to three seconds
+  after `addProjectV2ItemById` has returned its id (measured, repeatedly, against the live
+  board). So the card was filed successfully and then absent from the column the reader had
+  just chosen for it, until a later refresh happened to catch up.
+
+  Asking for the rest here is what lets the card be drawn from GitHub's own answer instead
+  of from a refetch that has not caught up or a guess that would be inventing a record. The
+  fields left out are left out because they are *known* rather than unknown: a brand-new
+  issue has no labels, no assignees and no comments.
+*/
 const CREATE_ISSUE = `
 mutation($repositoryId:ID!, $title:String!, $body:String) {
   createIssue(input:{ repositoryId:$repositoryId, title:$title, body:$body }) {
-    issue { id number url title }
+    issue {
+      id number url title body state createdAt updatedAt
+      repository { nameWithOwner }
+      author { login avatarUrl }
+    }
   }
 }`;
 
@@ -499,15 +518,17 @@ mutation($projectId:ID!, $contentId:ID!) {
   }
 }`;
 
-/** What a successful create leaves behind, in the ids that matter afterwards. */
+/**
+ * A successful create, complete enough to draw a card from without reading the board again.
+ *
+ * `content` is the issue exactly as `ItemContent` describes it, so the caller assembles a
+ * `ProjectItem` rather than translating between two shapes — see `CREATE_ISSUE` for why the
+ * mutation is asked to return all of it.
+ */
 export interface CreatedIssue {
   /** The `PVTI_…` board row — what a Status write must address. See `ProjectItem.id`. */
   itemId: string;
-  /** The `I_…` issue node. Kept because a comment posted next needs this one, not the row. */
-  issueId: string;
-  number: number;
-  url: string;
-  title: string;
+  content: ItemContent;
 }
 
 /**
@@ -555,7 +576,20 @@ export async function createIssue(
   }
 
   const created = await graphql<{
-    createIssue: { issue: { id: string; number: number; url: string; title: string } | null } | null;
+    createIssue: {
+      issue: {
+        id: string;
+        number: number;
+        url: string;
+        title: string;
+        body: string | null;
+        state: string;
+        createdAt: string;
+        updatedAt: string;
+        repository: { nameWithOwner: string } | null;
+        author: { login: string; avatarUrl: string } | null;
+      } | null;
+    } | null;
   }>(config.token, CREATE_ISSUE, { repositoryId: repo.repository.id, title, body: body || null });
   const issue = created.createIssue?.issue;
   if (!issue) throw new GitHubError('GitHub accepted the issue but returned nothing to show for it.');
@@ -572,7 +606,28 @@ export async function createIssue(
     throw new GitHubError(`Opened #${issue.number}, but it could not be added to the board. It is on github.com.`);
   }
 
-  return { itemId, issueId: issue.id, number: issue.number, url: issue.url, title: issue.title };
+  return {
+    itemId,
+    content: {
+      id: issue.id,
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      state: issue.state,
+      url: issue.url,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      repository: issue.repository?.nameWithOwner ?? repository,
+      author: issue.author,
+      // Empty because they are empty, not because they are unknown: nothing can have been
+      // labelled, assigned or commented on in the moment between creating it and reading
+      // this response.
+      labels: [],
+      assignees: [],
+      comments: 0,
+      isPullRequest: false
+    }
+  };
 }
 
 /**
