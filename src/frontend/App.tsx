@@ -6,6 +6,7 @@ import {
   itemMatches,
   fieldByName,
   columnsFrom,
+  columnIdFor,
   STATUS_FIELD,
   NO_STATUS
 } from './types';
@@ -64,7 +65,17 @@ export const App: React.FC = () => {
    * states, one strip: they never coexist in practice, because the create that sets this
    * clears that.
    */
-  const [notice, setNotice] = React.useState<{ text: string; url: string } | null>(null);
+  const [notice, setNotice] = React.useState<{
+    text: string;
+    url: string;
+    /**
+     * The card was filed successfully and the current view does not show it — a filter, the
+     * search box, or a collapsed column. `revealColumnId` is the column to expand, when that
+     * is the reason. See `createIssue`.
+     */
+    hidden?: boolean;
+    revealColumnId?: string;
+  } | null>(null);
   /** When the board on screen was last answered for. Drives the "updated" label. */
   const [loadedAt, setLoadedAt] = React.useState<number | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
@@ -578,7 +589,40 @@ export const App: React.FC = () => {
           return;
         }
         setNewIssue(false);
-        setNotice({ text: `Opened #${res.issue.number} — ${res.issue.title}`, url: res.issue.url });
+
+        /*
+          Would the reader actually see this card, in the view they are looking at?
+
+          A brand-new issue has no Priority and no Size, and on a board that has been through
+          AI Prioritize *every existing item has both*. So any Priority or Size filter hides
+          precisely the cards that were just created and keeps every older one — which looks
+          exactly like the issue was never filed. Reported as "I lost issue 230 from the
+          project board view", on a board where #230 was present, in Backlog, the whole time.
+          The search box and a collapsed column do the same thing for the same reason.
+
+          The count in the header does say "17 of 22 items" when a filter is on, and that was
+          evidently not enough — it is ambient, and this is the one moment the reader is
+          looking for a specific card. So the notice says it outright and offers the way back.
+          The view is not changed for them: silently clearing a filter someone set is its own
+          kind of losing a card.
+        */
+        const statusField = board ? fieldByName(board.fields, STATUS_FIELD) : null;
+        const columnId = columnIdFor(res.item, statusField?.id ?? null);
+        const columnCollapsed = collapsed.has(columnId);
+        const passes =
+          itemMatches(res.item, search) &&
+          passesFilter(res.item.singleSelect, board ? fieldByName(board.fields, PRIORITY_FIELD) : null, filters.priority) &&
+          passesFilter(res.item.singleSelect, board ? fieldByName(board.fields, SIZE_FIELD) : null, filters.size);
+        const hidden = !passes || columnCollapsed;
+
+        setNotice({
+          text: hidden
+            ? `Opened #${res.issue.number} — ${res.issue.title}. It is on the board, but the current view is hiding it.`
+            : `Opened #${res.issue.number} — ${res.issue.title}`,
+          url: res.issue.url,
+          hidden,
+          revealColumnId: columnCollapsed ? columnId : undefined
+        });
 
         /*
           Put the card on the board now, from the server's answer, and go on holding it until
@@ -746,6 +790,23 @@ export const App: React.FC = () => {
         <div className="cpb-notice cpb-error--bar" role="status">
           <span>
             {notice.text}{' '}
+            {/* Clears whatever is hiding it — the search box, both field filters, and the
+                column if it is collapsed. An explicit action rather than something done for
+                the reader: a filter they set being silently dropped is its own way to lose
+                track of a board. */}
+            {notice.hidden && (
+              <button
+                className="cpb-notice-action"
+                onClick={() => {
+                  setSearch('');
+                  setFilters(NO_FILTERS);
+                  if (notice.revealColumnId) toggleColumn(notice.revealColumnId);
+                  setNotice({ ...notice, hidden: false, revealColumnId: undefined, text: notice.text.split('.')[0] });
+                }}
+              >
+                Show it
+              </button>
+            )}{' '}
             <a href={notice.url} target="_blank" rel="noreferrer noopener">
               Open on GitHub
             </a>
