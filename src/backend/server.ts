@@ -141,8 +141,14 @@ async function handleGetBoard(req: http.IncomingMessage, res: http.ServerRespons
     if (hit) return sendJson(res, 200, hit);
   }
 
-  const board = await projectService.fetchBoard(config);
-  cache.set(projectPath, stamp(board));
+  // Stamped once and then both cached and sent. Stamping only the cached copy — which is
+  // what this did until a live create caught it — leaves the *fresh* read, the one that
+  // actually knows when it happened, as the only response without a time on it, while a
+  // reply served from cache carried one. Exactly backwards, and invisible from the
+  // frontend, which simply fell back to "now" and was right by accident on the cached path
+  // and wrong on the fresh one.
+  const board = stamp(await projectService.fetchBoard(config));
+  cache.set(projectPath, board);
   sendJson(res, 200, board);
 }
 

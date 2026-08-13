@@ -13540,8 +13540,8 @@ async function handleGetBoard(req, res) {
     const hit = get(projectPath);
     if (hit) return sendJson(res, 200, hit);
   }
-  const board = await fetchBoard(config);
-  set(projectPath, stamp(board));
+  const board = stamp(await fetchBoard(config));
+  set(projectPath, board);
   sendJson(res, 200, board);
 }
 var WRITABLE = [STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD];
