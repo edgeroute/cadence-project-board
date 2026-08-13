@@ -13249,6 +13249,48 @@ async function addComment(config, issueId, body) {
     author: node.author
   };
 }
+var REPOSITORY_ID = `
+query($owner:String!, $name:String!) {
+  repository(owner:$owner, name:$name) { id nameWithOwner hasIssuesEnabled }
+}`;
+var CREATE_ISSUE = `
+mutation($repositoryId:ID!, $title:String!, $body:String) {
+  createIssue(input:{ repositoryId:$repositoryId, title:$title, body:$body }) {
+    issue { id number url title }
+  }
+}`;
+var ADD_TO_PROJECT = `
+mutation($projectId:ID!, $contentId:ID!) {
+  addProjectV2ItemById(input:{ projectId:$projectId, contentId:$contentId }) {
+    item { id }
+  }
+}`;
+async function createIssue(config, projectId, repository, title, body) {
+  const [owner, name] = repository.split("/");
+  if (!owner || !name) {
+    throw new GitHubError(`"${repository}" is not a repository \u2014 it should look like ${config.owner}/some-repo.`);
+  }
+  const repo = await graphql(config.token, REPOSITORY_ID, { owner, name });
+  if (!repo.repository) {
+    throw new GitHubError(`No repository called ${repository}, or this token cannot see it.`);
+  }
+  if (!repo.repository.hasIssuesEnabled) {
+    throw new GitHubError(`${repo.repository.nameWithOwner} has issues turned off, so there is nowhere to file this.`);
+  }
+  const created = await graphql(config.token, CREATE_ISSUE, { repositoryId: repo.repository.id, title, body: body || null });
+  const issue = created.createIssue?.issue;
+  if (!issue) throw new GitHubError("GitHub accepted the issue but returned nothing to show for it.");
+  const added = await graphql(
+    config.token,
+    ADD_TO_PROJECT,
+    { projectId, contentId: issue.id }
+  );
+  const itemId = added.addProjectV2ItemById?.item?.id;
+  if (!itemId) {
+    throw new GitHubError(`Opened #${issue.number}, but it could not be added to the board. It is on github.com.`);
+  }
+  return { itemId, issueId: issue.id, number: issue.number, url: issue.url, title: issue.title };
+}
 var MUTATION_CHUNK = 20;
 async function setManySingleSelect(config, projectId, writes) {
   const failures = /* @__PURE__ */ new Map();
@@ -13470,6 +13512,9 @@ function sendError(res, e) {
   log(`unhandled: ${msg}`);
   sendJson(res, 500, { error: msg });
 }
+function stamp(board) {
+  return { ...board, fetchedAt: Date.now() };
+}
 async function handleGetConfig(req, res) {
   const projectPath = query(req)["path"] ?? "";
   if (!projectPath) return sendJson(res, 200, { notConfigured: true, error: "No project is open." });
@@ -13496,14 +13541,14 @@ async function handleGetBoard(req, res) {
     if (hit) return sendJson(res, 200, hit);
   }
   const board = await fetchBoard(config);
-  set(projectPath, board);
+  set(projectPath, stamp(board));
   sendJson(res, 200, board);
 }
 var WRITABLE = [STATUS_FIELD, PRIORITY_FIELD, SIZE_FIELD];
 async function applyWrites(projectPath, writes) {
   const config = await readConfig(projectPath);
   const board = await fetchBoard(config);
-  set(projectPath, board);
+  set(projectPath, stamp(board));
   const outcomes = [];
   const resolved = [];
   for (const write of writes) {
@@ -13602,7 +13647,7 @@ async function handlePrioritize(req, res) {
   if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
   const config = await readConfig(projectPath);
   const board = await fetchBoard(config);
-  set(projectPath, board);
+  set(projectPath, stamp(board));
   const body = JSON.parse(await readBody(req) || "{}");
   const wanted = new Set(body.itemIds ?? []);
   const items = wanted.size ? board.items.filter((i) => wanted.has(i.id)) : board.items;
@@ -13629,6 +13674,43 @@ async function handlePostComment(req, res) {
   invalidate(projectPath);
   sendJson(res, 200, { ok: true, comment });
 }
+async function handleCreateIssue(req, res) {
+  const projectPath = query(req)["path"] ?? "";
+  if (!projectPath) return sendJson(res, 400, { error: "No project is open." });
+  const body = JSON.parse(await readBody(req));
+  const title = (body.title ?? "").trim();
+  if (!title) return sendJson(res, 200, { error: "Give the issue a title first." });
+  const repository = (body.repository ?? "").trim();
+  if (!repository) return sendJson(res, 200, { error: "Choose which repository this belongs in." });
+  const config = await readConfig(projectPath);
+  const board = await fetchBoard(config);
+  const created = await createIssue(
+    config,
+    board.projectId,
+    repository,
+    title,
+    (body.body ?? "").trim() || null
+  );
+  invalidate(projectPath);
+  let warning;
+  const wanted = (body.status ?? "").trim();
+  if (wanted) {
+    const status = fieldByName(board.fields, STATUS_FIELD);
+    const option = status?.options.find((o) => o.name.toLowerCase() === wanted.toLowerCase());
+    if (!status || !option) {
+      warning = `Opened #${created.number}, but there is no "${wanted}" column to put it in.`;
+    } else {
+      try {
+        await setManySingleSelect(config, board.projectId, [
+          { itemId: created.itemId, fieldId: status.id, optionId: option.id }
+        ]);
+      } catch (e) {
+        warning = `Opened #${created.number}, but it could not be moved to ${option.name} \u2014 ${e.message}`;
+      }
+    }
+  }
+  sendJson(res, 200, { ok: true, issue: created, warning });
+}
 var server = import_http.default.createServer((req, res) => {
   const method = req.method ?? "GET";
   const pathname = (() => {
@@ -13654,6 +13736,7 @@ var server = import_http.default.createServer((req, res) => {
     if (method === "POST" && pathname === "/fields") return handleSetFields(req, res);
     if (method === "GET" && pathname === "/comments") return handleGetComments(req, res);
     if (method === "POST" && pathname === "/comments") return handlePostComment(req, res);
+    if (method === "POST" && pathname === "/issues") return handleCreateIssue(req, res);
     if (method === "POST" && pathname === "/prioritize") return handlePrioritize(req, res);
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true });
     sendJson(res, 404, { error: `No route for ${method} ${pathname}` });

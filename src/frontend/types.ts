@@ -88,6 +88,21 @@ export interface BoardData {
   url: string;
   fields: ProjectField[];
   items: ProjectItem[];
+  /**
+   * When this board was actually read from GitHub, stamped by the backend.
+   *
+   * The header's "updated 2m ago" is drawn from this rather than from when the response
+   * arrived, and the difference is the server's 20-second cache: a request answered from
+   * it is a *fresh delivery of an older board*, and timing it from arrival would let the
+   * label say "just now" about a copy that is twenty seconds stale. Small, and exactly the
+   * kind of small that makes a freshness indicator worse than none — its whole job is to be
+   * trusted when the board looks wrong.
+   *
+   * Optional because it is stamped at the edge rather than by `fetchBoard`, so a caller
+   * that builds a board for its own use (the write path, resolving ids) does not have to
+   * invent one.
+   */
+  fetchedAt?: number;
 }
 
 /** What the backend answers with when the project has not been configured yet. */

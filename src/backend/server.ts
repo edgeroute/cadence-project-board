@@ -101,6 +101,16 @@ function sendError(res: http.ServerResponse, e: unknown): void {
   sendJson(res, 500, { error: msg });
 }
 
+/**
+ * Stamp a freshly-read board with the moment it was read.
+ *
+ * Applied at every point a board enters the cache, so the stamp survives being served from
+ * it — which is the only reason it exists. See `BoardData.fetchedAt`.
+ */
+function stamp(board: Awaited<ReturnType<typeof projectService.fetchBoard>>) {
+  return { ...board, fetchedAt: Date.now() };
+}
+
 async function handleGetConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const projectPath = query(req)['path'] ?? '';
   if (!projectPath) return sendJson(res, 200, { notConfigured: true, error: 'No project is open.' });
@@ -132,7 +142,7 @@ async function handleGetBoard(req: http.IncomingMessage, res: http.ServerRespons
   }
 
   const board = await projectService.fetchBoard(config);
-  cache.set(projectPath, board);
+  cache.set(projectPath, stamp(board));
   sendJson(res, 200, board);
 }
 
@@ -187,7 +197,7 @@ async function applyWrites(
   // about to be issued against, and a stale option id fails in a way that reads like the
   // board is broken rather than out of date.
   const board = await projectService.fetchBoard(config);
-  cache.set(projectPath, board);
+  cache.set(projectPath, stamp(board));
 
   // ---- resolve every write against the snapshot before anything is sent -------------
   const outcomes: WriteOutcome[] = [];
@@ -361,7 +371,7 @@ async function handlePrioritize(req: http.IncomingMessage, res: http.ServerRespo
 
   const config = await configService.readConfig(projectPath);
   const board = await projectService.fetchBoard(config);
-  cache.set(projectPath, board);
+  cache.set(projectPath, stamp(board));
 
   // Only what the reader is looking at. The frontend posts the filtered, searched set of
   // item ids, so triaging "everything in Backlog" costs one Backlog-sized request rather
@@ -407,6 +417,74 @@ async function handlePostComment(req: http.IncomingMessage, res: http.ServerResp
   sendJson(res, 200, { ok: true, comment });
 }
 
+/**
+ * Open an issue and put it on the board, optionally in a named column.
+ *
+ * The board is read fresh rather than from cache, for the reason `applyWrites` gives: this
+ * resolves the project id the add is issued against and the Status option id the new row is
+ * then set to, and a stale id fails in a way that reads like the plugin is broken rather
+ * than out of date.
+ *
+ * **A failed Status write does not fail the request.** The issue is open and on the board
+ * by the time it is attempted; reporting the whole thing as a failure would send the reader
+ * to write it again, and they would end up with two. It comes back as a `warning` beside an
+ * `ok`, which is the same shape `handleSetField` already uses when the field lands and the
+ * label mirror does not.
+ */
+async function handleCreateIssue(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const projectPath = query(req)['path'] ?? '';
+  if (!projectPath) return sendJson(res, 400, { error: 'No project is open.' });
+
+  const body = JSON.parse(await readBody(req)) as {
+    repository?: string;
+    title?: string;
+    body?: string;
+    status?: string | null;
+  };
+
+  // Trimmed and checked here rather than trusted from the form. GitHub will accept a
+  // whitespace-only title and draw a blank card, which is a thing nobody can find again.
+  const title = (body.title ?? '').trim();
+  if (!title) return sendJson(res, 200, { error: 'Give the issue a title first.' });
+  const repository = (body.repository ?? '').trim();
+  if (!repository) return sendJson(res, 200, { error: 'Choose which repository this belongs in.' });
+
+  const config = await configService.readConfig(projectPath);
+  const board = await projectService.fetchBoard(config);
+
+  const created = await projectService.createIssue(
+    config,
+    board.projectId,
+    repository,
+    title,
+    (body.body ?? '').trim() || null
+  );
+
+  // The board is a row longer than the cached copy says. Dropped before the Status write,
+  // so a throw in there still leaves the next read going to GitHub.
+  cache.invalidate(projectPath);
+
+  let warning: string | undefined;
+  const wanted = (body.status ?? '').trim();
+  if (wanted) {
+    const status = fieldByName(board.fields, STATUS_FIELD);
+    const option = status?.options.find((o) => o.name.toLowerCase() === wanted.toLowerCase());
+    if (!status || !option) {
+      warning = `Opened #${created.number}, but there is no "${wanted}" column to put it in.`;
+    } else {
+      try {
+        await projectService.setManySingleSelect(config, board.projectId, [
+          { itemId: created.itemId, fieldId: status.id, optionId: option.id }
+        ]);
+      } catch (e) {
+        warning = `Opened #${created.number}, but it could not be moved to ${option.name} — ${(e as Error).message}`;
+      }
+    }
+  }
+
+  sendJson(res, 200, { ok: true, issue: created, warning });
+}
+
 const server = http.createServer((req, res) => {
   const method = req.method ?? 'GET';
   const pathname = (() => {
@@ -434,6 +512,7 @@ const server = http.createServer((req, res) => {
     if (method === 'POST' && pathname === '/fields') return handleSetFields(req, res);
     if (method === 'GET' && pathname === '/comments') return handleGetComments(req, res);
     if (method === 'POST' && pathname === '/comments') return handlePostComment(req, res);
+    if (method === 'POST' && pathname === '/issues') return handleCreateIssue(req, res);
     if (method === 'POST' && pathname === '/prioritize') return handlePrioritize(req, res);
     if (method === 'GET' && pathname === '/health') return sendJson(res, 200, { ok: true });
     sendJson(res, 404, { error: `No route for ${method} ${pathname}` });

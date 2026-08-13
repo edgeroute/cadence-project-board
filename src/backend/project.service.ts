@@ -480,6 +480,101 @@ export async function addComment(
   };
 }
 
+const REPOSITORY_ID = `
+query($owner:String!, $name:String!) {
+  repository(owner:$owner, name:$name) { id nameWithOwner hasIssuesEnabled }
+}`;
+
+const CREATE_ISSUE = `
+mutation($repositoryId:ID!, $title:String!, $body:String) {
+  createIssue(input:{ repositoryId:$repositoryId, title:$title, body:$body }) {
+    issue { id number url title }
+  }
+}`;
+
+const ADD_TO_PROJECT = `
+mutation($projectId:ID!, $contentId:ID!) {
+  addProjectV2ItemById(input:{ projectId:$projectId, contentId:$contentId }) {
+    item { id }
+  }
+}`;
+
+/** What a successful create leaves behind, in the ids that matter afterwards. */
+export interface CreatedIssue {
+  /** The `PVTI_…` board row — what a Status write must address. See `ProjectItem.id`. */
+  itemId: string;
+  /** The `I_…` issue node. Kept because a comment posted next needs this one, not the row. */
+  issueId: string;
+  number: number;
+  url: string;
+  title: string;
+}
+
+/**
+ * Open an issue and put it on the board.
+ *
+ * **Three calls, and they cannot be collapsed into fewer.** GitHub has no mutation that
+ * creates an issue *into* a project: `createIssue` takes a repository and knows nothing
+ * about boards, and `addProjectV2ItemById` takes a `contentId` that has to exist before it
+ * can be named. The repository lookup is a third because `createIssue` addresses a
+ * repository by node id, and every human way of naming one — the `owner/name` printed on a
+ * card, the string typed into the form — is not that id.
+ *
+ * The order is also the failure ordering, and it is the right way round. If the add fails,
+ * the issue still exists and is reachable by URL: the reader has lost a place on a board,
+ * not the thing they wrote. Any scheme that created the issue last would risk discarding
+ * typed prose on a network error, which is the one outcome actually worth engineering
+ * against here — hence the error below naming the number rather than reporting a bare
+ * failure.
+ *
+ * `hasIssuesEnabled` is read in the same breath as the id because a repository with issues
+ * turned off answers `createIssue` with a permissions-shaped error, and "Resource not
+ * accessible by integration" sends someone to go and check their token when the token is
+ * fine.
+ */
+export async function createIssue(
+  config: ResolvedConfig,
+  projectId: string,
+  repository: string,
+  title: string,
+  body: string | null
+): Promise<CreatedIssue> {
+  const [owner, name] = repository.split('/');
+  if (!owner || !name) {
+    throw new GitHubError(`"${repository}" is not a repository — it should look like ${config.owner}/some-repo.`);
+  }
+
+  const repo = await graphql<{
+    repository: { id: string; nameWithOwner: string; hasIssuesEnabled: boolean } | null;
+  }>(config.token, REPOSITORY_ID, { owner, name });
+  if (!repo.repository) {
+    throw new GitHubError(`No repository called ${repository}, or this token cannot see it.`);
+  }
+  if (!repo.repository.hasIssuesEnabled) {
+    throw new GitHubError(`${repo.repository.nameWithOwner} has issues turned off, so there is nowhere to file this.`);
+  }
+
+  const created = await graphql<{
+    createIssue: { issue: { id: string; number: number; url: string; title: string } | null } | null;
+  }>(config.token, CREATE_ISSUE, { repositoryId: repo.repository.id, title, body: body || null });
+  const issue = created.createIssue?.issue;
+  if (!issue) throw new GitHubError('GitHub accepted the issue but returned nothing to show for it.');
+
+  const added = await graphql<{ addProjectV2ItemById: { item: { id: string } | null } | null }>(
+    config.token,
+    ADD_TO_PROJECT,
+    { projectId, contentId: issue.id }
+  );
+  const itemId = added.addProjectV2ItemById?.item?.id;
+  if (!itemId) {
+    // The issue exists. Saying so, with its number, is the difference between a reader who
+    // opens it on github.com and one who writes the whole thing again.
+    throw new GitHubError(`Opened #${issue.number}, but it could not be added to the board. It is on github.com.`);
+  }
+
+  return { itemId, issueId: issue.id, number: issue.number, url: issue.url, title: issue.title };
+}
+
 /**
  * One field change.
  *

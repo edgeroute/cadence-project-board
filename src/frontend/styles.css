@@ -726,3 +726,57 @@
   margin: 6px 0 2px;
 }
 .cpb-tag--muted { background: var(--cpb-panel-2); color: var(--cpb-dim); }
+
+/* ---------------------------------------------------------------------------
+ * The "updated 2m ago" stamp, and the success counterpart to the error bar.
+ *
+ * `cpb-updated` is dimmer than the count it follows, because it answers a question
+ * nobody asks until they doubt the board — it must be findable when looked for and
+ * silent the rest of the time. See `agoLabel` in refreshPolicy.ts for why it exists
+ * at all: an automatic refresh removes the evidence that pressing Refresh used to be.
+ *
+ * `cpb-notice` shares `cpb-error--bar`'s geometry deliberately. It is the same strip in
+ * the same place saying the opposite kind of thing, and giving it its own position would
+ * make two messages that never coexist fight for the reader's eye in two spots.
+ * ------------------------------------------------------------------------- */
+.cpb-updated { opacity: 0.7; }
+
+.cpb-notice {
+  background: var(--cpb-panel-2);
+  color: var(--cpb-text);
+  border: 1px solid var(--cpb-line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cpb-notice a { color: var(--cpb-accent); }
+
+/* ---------------------------------------------------------------------------
+ * The new-issue form.
+ *
+ * A label column and a control column, so the four rows line up down one edge rather
+ * than each finding its own. `align-items: center` everywhere except the description,
+ * whose label sits against the *first* line of a tall box rather than drifting to the
+ * middle of it.
+ * ------------------------------------------------------------------------- */
+.cpb-modal--form { max-width: 560px; }
+
+.cpb-form { display: flex; flex-direction: column; gap: 12px; }
+.cpb-form-row { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; }
+.cpb-form-row--tall { align-items: start; }
+.cpb-form-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cpb-dim);
+}
+.cpb-form-control { width: 100%; min-width: 0; }
+.cpb-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* The form stacks rather than truncates once the panel is too narrow for two columns —
+   this plugin draws inside a host tab whose width is not ours to assume. */
+@media (max-width: 520px) {
+  .cpb-form-row { grid-template-columns: 1fr; gap: 4px; }
+}

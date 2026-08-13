@@ -16,6 +16,8 @@ import { FilterBar, NO_FILTERS, passesFilter, type Filters } from './FilterBar';
 import { GitHubMark } from './GitHubMark';
 import { SORT_LABELS, DEFAULT_SORT, availableSortKeys, sortItems, type Sort, type SortKey } from './sortUtils';
 import { SuggestionsPanel, type PrioritizeResult } from './SuggestionsPanel';
+import { NewIssueModal, type NewIssueInput } from './NewIssueModal';
+import { agoLabel, canRefresh, REFRESH_INTERVAL_MS } from './refreshPolicy';
 import { PRIORITY_FIELD, SIZE_FIELD } from './types';
 
 interface ConfigShape {
@@ -50,6 +52,22 @@ export const App: React.FC = () => {
   const [settings, setSettings] = React.useState<ConfigShape | null>(null);
   const [savingSettings, setSavingSettings] = React.useState(false);
   const [settingsError, setSettingsError] = React.useState('');
+  const [newIssue, setNewIssue] = React.useState(false);
+  const [creating, setCreating] = React.useState(false);
+  const [createError, setCreateError] = React.useState('');
+  /**
+   * Something that went right, said in the bar the errors use.
+   *
+   * Separate state rather than a reuse of `error`, because the one thing this reports —
+   * "#231 is open and on the board" — is the opposite of an error and carries a link. Two
+   * states, one strip: they never coexist in practice, because the create that sets this
+   * clears that.
+   */
+  const [notice, setNotice] = React.useState<{ text: string; url: string } | null>(null);
+  /** When the board on screen was last answered for. Drives the "updated" label. */
+  const [loadedAt, setLoadedAt] = React.useState<number | null>(null);
+  const [now, setNow] = React.useState(() => Date.now());
+  const [dragging, setDragging] = React.useState(false);
 
   /**
    * Collapsed columns, remembered per project.
@@ -86,15 +104,27 @@ export const App: React.FC = () => {
     });
   };
 
+  /**
+   * Fetch the board.
+   *
+   * `quiet` is what makes the automatic refresh bearable. Without it every tick flips
+   * `loading`, which relabels the Refresh button to "Loading…" and — on a board that has
+   * not arrived yet — swaps the whole view for the loading panel. A background refresh
+   * that redraws the chrome every thirty seconds looks like a fault, not like being
+   * up to date. A quiet load also leaves `error` alone until it has something new to say,
+   * so a failed tick does not silently clear a message the reader has not read yet.
+   */
   const load = React.useCallback(
-    async (fresh: boolean) => {
+    async (fresh: boolean, quiet = false) => {
       if (!projectPath) {
         setLoading(false);
         setNotConfigured('Open a project to see its board.');
         return;
       }
-      setLoading(true);
-      setError('');
+      if (!quiet) {
+        setLoading(true);
+        setError('');
+      }
       setNotConfigured('');
       try {
         const res = (await api.rpc(
@@ -113,11 +143,14 @@ export const App: React.FC = () => {
           setError(res.error);
         } else {
           setBoard(res);
+          // The server's stamp, not this moment: a response served from the 20-second cache
+          // is a fresh delivery of an older board. See `BoardData.fetchedAt`.
+          setLoadedAt(res.fetchedAt ?? Date.now());
         }
       } catch (e) {
         setError((e as Error).message || 'Could not reach the plugin backend.');
       } finally {
-        setLoading(false);
+        if (!quiet) setLoading(false);
       }
     },
     [api, projectPath]
@@ -126,6 +159,114 @@ export const App: React.FC = () => {
   React.useEffect(() => {
     void load(false);
   }, [load]);
+
+  /**
+   * Is a drag happening right now?
+   *
+   * On `document` rather than threaded down through `Board` → `Column` → `Card`: the
+   * question is "is the reader dragging anything", which is a fact about the page and not
+   * about any one column, and `dragend` fires on the source element even when the drop
+   * lands outside the board entirely. A per-column boolean would miss exactly that case
+   * and leave the poll suspended forever.
+   */
+  React.useEffect(() => {
+    const start = () => setDragging(true);
+    const end = () => setDragging(false);
+    document.addEventListener('dragstart', start);
+    document.addEventListener('dragend', end);
+    document.addEventListener('drop', end);
+    return () => {
+      document.removeEventListener('dragstart', start);
+      document.removeEventListener('dragend', end);
+      document.removeEventListener('drop', end);
+    };
+  }, []);
+
+  /**
+   * The gate the automatic refresh is held behind — see `refreshPolicy`.
+   *
+   * Kept in a ref as well as computed for render, because the timer chain below is
+   * installed once and must read the *current* answer rather than the one that was true
+   * when it was scheduled. Re-subscribing the timer on every state change would restart
+   * the interval each time a card was ticked, which is a poll that never actually fires.
+   */
+  const gateRef = React.useRef({
+    writesPending: false,
+    dragging: false,
+    overlayOpen: false,
+    working: false,
+    hidden: false,
+    loading: false
+  });
+  gateRef.current = {
+    writesPending: pending.size > 0,
+    dragging,
+    overlayOpen: Boolean(selectedId || settings || suggestions || newIssue),
+    working: prioritizing || applying || creating || savingSettings,
+    hidden: typeof document !== 'undefined' && document.hidden,
+    loading
+  };
+
+  /**
+   * The automatic refresh.
+   *
+   * The timer chain is the reference plugin's — rescheduled after each fetch resolves
+   * rather than a bare `setInterval`, so a slow request cannot stack ticks behind it. What
+   * is added is the gate: a tick that arrives while something is happening skips its fetch
+   * and simply books the next one, because the interruption costs more than the staleness.
+   *
+   * The dependency list is deliberately just `load`. Everything else the tick consults is
+   * read through `gateRef` at fire time, so the chain survives the reader dragging cards
+   * and opening modals instead of being torn down and restarted by each one.
+   */
+  React.useEffect(() => {
+    if (!projectPath) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+
+    const schedule = () => {
+      if (stopped) return;
+      timer = setTimeout(() => {
+        const tick = canRefresh(gateRef.current) ? load(false, true) : Promise.resolve();
+        void tick.finally(schedule);
+      }, REFRESH_INTERVAL_MS);
+    };
+    schedule();
+
+    return () => {
+      stopped = true;
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [load, projectPath]);
+
+  /**
+   * Coming back to the tab refreshes immediately rather than waiting out the interval.
+   *
+   * Ticks are skipped while the tab is hidden — there is no one to show them to, and the
+   * board is re-read on mount anyway — so without this, returning to a tab left open
+   * overnight would show yesterday's board for up to thirty seconds. That is the single
+   * most likely moment for the board to be wrong and the most likely moment for someone to
+   * be looking at it.
+   */
+  React.useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden && canRefresh(gateRef.current)) void load(false, true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load]);
+
+  /**
+   * Ticks the "updated 2m ago" label along.
+   *
+   * Its own slow timer rather than a re-render of the board: the label is the only thing on
+   * screen that changes with the clock, and tying it to the refresh would leave it reading
+   * "just now" for the entire thirty seconds between fetches.
+   */
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(t);
+  }, []);
 
   const openSettings = async () => {
     setSettingsError('');
@@ -393,6 +534,50 @@ export const App: React.FC = () => {
     }
   }, [api, load, picked, projectPath, suggestions]);
 
+  /**
+   * File an issue and put it on the board.
+   *
+   * Not optimistic, unlike every other write here. A drag knows exactly what the board will
+   * look like afterwards — one field, one value — but a new issue has a number, a URL, an
+   * author and a timestamp that only GitHub can assign, and a card drawn from guesses at
+   * those is a card claiming things that are not yet true. So the modal stays up and busy
+   * until the server answers, and the board is refetched rather than patched.
+   *
+   * The failure is reported *into the modal* rather than into the page's error bar, because
+   * the modal is still open and still holds everything the reader typed. Closing it to show
+   * an error elsewhere would throw away the draft in order to explain why it was not saved.
+   */
+  const createIssue = React.useCallback(
+    async (input: NewIssueInput) => {
+      if (!projectPath) return;
+      setCreating(true);
+      setCreateError('');
+      try {
+        const res = (await api.rpc('POST', `/issues?path=${encodeURIComponent(projectPath)}`, input)) as {
+          ok?: boolean;
+          error?: string;
+          warning?: string;
+          issue?: { number: number; url: string; title: string };
+        };
+        if (res.error || !res.ok || !res.issue) {
+          setCreateError(res.error || 'Could not open the issue.');
+          return;
+        }
+        setNewIssue(false);
+        setError(res.warning ?? '');
+        setNotice({ text: `Opened #${res.issue.number} — ${res.issue.title}`, url: res.issue.url });
+        // `fresh`: the server dropped its cache on the write, and a cached board here would
+        // be one that does not contain the card the reader just watched themselves file.
+        await load(true);
+      } catch (e) {
+        setCreateError((e as Error).message || 'Could not open the issue.');
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, load, projectPath]
+  );
+
   /** What the board holds now, for the panel's old → new column. */
   const currentValues = React.useMemo(() => {
     const map = new Map<string, { priority: string | null; size: string | null }>();
@@ -421,6 +606,10 @@ export const App: React.FC = () => {
               {filtered.length}
               {filtered.length !== board.items.length ? ` of ${board.items.length}` : ''} item
               {board.items.length === 1 ? '' : 's'} · {columnCount} columns
+              {/* The evidence that the board is live. Pressing Refresh used to be its own
+                  proof that the view was current; an automatic refresh takes that away
+                  unless something puts it back. See `agoLabel`. */}
+              {loadedAt !== null && <span className="cpb-updated"> · updated {agoLabel(loadedAt, now)}</span>}
             </span>
           )}
         </div>
@@ -470,9 +659,25 @@ export const App: React.FC = () => {
               </button>
             </>
           )}
+          {/* Still here, and still the first thing anyone reaches for after editing on
+              github.com. The automatic refresh makes it unnecessary rather than redundant:
+              it is also the way to skip the gate, which is exactly what a reader who has
+              just moved something in another tab wants. */}
           <button className="cpb-btn" onClick={() => void load(true)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
+          {board && (
+            <button
+              className="cpb-btn cpb-btn--primary"
+              onClick={() => {
+                setCreateError('');
+                setNewIssue(true);
+              }}
+              title="Open a new issue and put it on this board"
+            >
+              New issue
+            </button>
+          )}
           {board && (
             <a
               className="cpb-btn cpb-icon-btn"
@@ -497,6 +702,23 @@ export const App: React.FC = () => {
         <div className="cpb-error cpb-error--bar" role="alert">
           <span>{error}</span>
           <button className="cpb-error-dismiss" onClick={() => setError('')} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* `role="status"` and not `alert`: this reports something that went right, and an
+          alert interrupts a screen reader mid-sentence to say so. The link is the point of
+          the message — a number with no way to reach it is a fact, not a result. */}
+      {notice && (
+        <div className="cpb-notice cpb-error--bar" role="status">
+          <span>
+            {notice.text}{' '}
+            <a href={notice.url} target="_blank" rel="noreferrer noopener">
+              Open on GitHub
+            </a>
+          </span>
+          <button className="cpb-error-dismiss" onClick={() => setNotice(null)} aria-label="Dismiss">
             ✕
           </button>
         </div>
@@ -571,6 +793,18 @@ export const App: React.FC = () => {
             setSuggestions(null);
             setPicked(new Set());
           }}
+        />
+      )}
+
+      {newIssue && board && (
+        <NewIssueModal
+          items={board.items}
+          fields={board.fields}
+          owner={settings?.owner ?? ''}
+          submitting={creating}
+          error={createError}
+          onCreate={(input) => void createIssue(input)}
+          onClose={() => setNewIssue(false)}
         />
       )}
 
